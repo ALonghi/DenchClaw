@@ -1,6 +1,6 @@
 import { renameSync, existsSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
-import { resolveFilesystemPath, isProtectedSystemPath } from "@/lib/workspace";
+import { resolveWorkspacePath, isProtectedSystemPath } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,7 +28,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const sourceTarget = resolveFilesystemPath(sourcePath);
+  const sourceTarget = resolveWorkspacePath(sourcePath);
   if (isProtectedSystemPath(sourceTarget)) {
     return Response.json(
       { error: "Cannot move system file" },
@@ -43,7 +43,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const destinationDirTarget = resolveFilesystemPath(destinationDir);
+  const destinationDirTarget = resolveWorkspacePath(destinationDir);
   if (!destinationDirTarget) {
     return Response.json(
       { error: "Destination not found or path traversal rejected" },
@@ -69,8 +69,10 @@ export async function POST(req: Request) {
   }
 
   const itemName = basename(sourceTarget.absolutePath);
-  const destAbs = join(destinationDirTarget.absolutePath, itemName);
-  const destinationTarget = resolveFilesystemPath(destAbs, { allowMissing: true });
+  const destinationInputPath = destinationDirTarget.workspaceRelativePath
+    ? `${destinationDirTarget.workspaceRelativePath}/${itemName}`
+    : itemName;
+  const destinationTarget = resolveWorkspacePath(destinationInputPath, { allowMissing: true });
 
   if (!destinationTarget) {
     return Response.json(
@@ -86,7 +88,7 @@ export async function POST(req: Request) {
     );
   }
 
-  if (existsSync(destAbs)) {
+  if (existsSync(destinationTarget.absolutePath)) {
     return Response.json(
       { error: `'${itemName}' already exists in destination` },
       { status: 409 },

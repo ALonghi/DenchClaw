@@ -1,6 +1,6 @@
 import { renameSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { resolveFilesystemPath, isProtectedSystemPath } from "@/lib/workspace";
+import { dirname } from "node:path";
+import { resolveWorkspacePath, isProtectedSystemPath } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,7 +28,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const sourcePath = resolveFilesystemPath(relPath);
+  const sourcePath = resolveWorkspacePath(relPath);
   if (isProtectedSystemPath(sourcePath)) {
     return Response.json(
       { error: "Cannot rename system file" },
@@ -51,9 +51,10 @@ export async function POST(req: Request) {
     );
   }
 
-  const parentDir = dirname(sourcePath.absolutePath);
-  const newAbsPath = join(parentDir, newName);
-  const destinationPath = resolveFilesystemPath(newAbsPath, { allowMissing: true });
+  const sourceRelativePath = sourcePath.workspaceRelativePath ?? relPath;
+  const parentDir = dirname(sourceRelativePath);
+  const destinationInputPath = parentDir === "." ? newName : `${parentDir}/${newName}`;
+  const destinationPath = resolveWorkspacePath(destinationInputPath, { allowMissing: true });
 
   if (!destinationPath) {
     return Response.json(
@@ -69,7 +70,7 @@ export async function POST(req: Request) {
     );
   }
 
-  if (existsSync(newAbsPath)) {
+  if (existsSync(destinationPath.absolutePath)) {
     return Response.json(
       { error: `A file named '${newName}' already exists` },
       { status: 409 },

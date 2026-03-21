@@ -3,6 +3,7 @@ import type { IncomingMessage } from "node:http";
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import { chmodSync, existsSync } from "node:fs";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 
 interface TerminalSession {
   pty: import("node-pty").IPty;
@@ -15,10 +16,41 @@ const _g = globalThis as unknown as {
   __terminalWss?: WebSocketServer;
   __terminalDidFixSpawnHelper?: boolean;
   __terminalPort?: number;
+  __terminalAuthToken?: string;
 };
 
 let wss: WebSocketServer | null = _g.__terminalWss ?? null;
 let didFixSpawnHelper = _g.__terminalDidFixSpawnHelper ?? false;
+
+function getOrCreateTerminalAuthToken(): string {
+  if (!_g.__terminalAuthToken) {
+    _g.__terminalAuthToken = randomBytes(32).toString("hex");
+  }
+  return _g.__terminalAuthToken;
+}
+
+function hasValidTerminalOrigin(originHeader: string | undefined): boolean {
+  if (!originHeader) {return false;}
+  try {
+    const origin = new URL(originHeader);
+    return origin.hostname === "127.0.0.1" || origin.hostname === "localhost" || origin.hostname === "::1";
+  } catch {
+    return false;
+  }
+}
+
+function hasValidTerminalToken(req: IncomingMessage): boolean {
+  try {
+    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`);
+    const token = url.searchParams.get("token");
+    if (!token) {return false;}
+    const expected = Buffer.from(getOrCreateTerminalAuthToken(), "utf-8");
+    const received = Buffer.from(token, "utf-8");
+    return expected.length === received.length && timingSafeEqual(expected, received);
+  } catch {
+    return false;
+  }
+}
 
 function ensureSpawnHelperExecutable() {
   if (didFixSpawnHelper || process.platform === "win32") return;
@@ -144,7 +176,12 @@ function handleMessage(ws: WebSocket, raw: string) {
   }
 }
 
-function handleConnection(ws: WebSocket, _req: IncomingMessage) {
+function handleConnection(ws: WebSocket, req: IncomingMessage) {
+  if (!hasValidTerminalOrigin(req.headers.origin) || !hasValidTerminalToken(req)) {
+    ws.close(1008, "Unauthorized");
+    return;
+  }
+
   ws.on("message", (data) => {
     handleMessage(ws, data.toString());
   });
@@ -187,6 +224,10 @@ export function startTerminalServer(port: number) {
 
 export function getTerminalPort(): number | null {
   return _g.__terminalPort ?? null;
+}
+
+export function getTerminalAuthToken(): string {
+  return getOrCreateTerminalAuthToken();
 }
 
 export function stopTerminalServer() {

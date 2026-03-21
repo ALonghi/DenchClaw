@@ -1,6 +1,6 @@
 import { mkdirSync, existsSync } from "node:fs";
 import { resolve, normalize } from "node:path";
-import { resolveFilesystemPath, isProtectedSystemPath } from "@/lib/workspace";
+import { resolveFilesystemPath, resolveWorkspacePath, isProtectedSystemPath } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -9,10 +9,8 @@ export const runtime = "nodejs";
  * POST /api/workspace/mkdir
  * Body: { path: string; absolute?: boolean }
  *
- * Creates a new directory. By default paths are resolved relative to the
- * workspace root.  When `absolute` is true the path is treated as a
- * filesystem-absolute path (used by the directory picker for workspace
- * creation outside the current workspace).
+ * Creates a new directory. Absolute paths remain supported for the
+ * directory picker flow; other workspace-facing file APIs are locked down.
  */
 export async function POST(req: Request) {
   let body: { path?: string; absolute?: boolean };
@@ -32,7 +30,9 @@ export async function POST(req: Request) {
 
   const targetPath = useAbsolute && !rawPath.startsWith("/") && !rawPath.startsWith("~/")
     ? resolveFilesystemPath(resolve(normalize(rawPath)), { allowMissing: true })
-    : resolveFilesystemPath(rawPath, { allowMissing: true });
+    : useAbsolute
+      ? resolveFilesystemPath(rawPath, { allowMissing: true })
+      : resolveWorkspacePath(rawPath, { allowMissing: true });
 
   if (!targetPath) {
     return Response.json(

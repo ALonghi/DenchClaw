@@ -1,14 +1,16 @@
-import { exec } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { resolve, normalize } from "node:path";
-import { homedir } from "node:os";
+import { promisify } from "node:util";
+import { safeResolvePath } from "@/lib/workspace";
+
+const execFileAsync = promisify(execFile);
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 /**
  * POST /api/workspace/open-file
- * Opens a file or directory using the system's default application.
+ * Opens a workspace file or directory using the system's default application.
  * On macOS this uses `open`, on Linux `xdg-open`.
  */
 export async function POST(req: Request) {
@@ -30,28 +32,12 @@ export async function POST(req: Request) {
 		);
 	}
 
-	// Expand ~ to home directory
-	const expanded = rawPath.startsWith("~/")
-		? rawPath.replace(/^~/, homedir())
-		: rawPath;
-
-	let resolved = resolve(normalize(expanded));
-
-	// If the file doesn't exist and looks like a bare filename, try to locate it
-	// using macOS Spotlight (mdfind).
-	if (!existsSync(resolved) && !rawPath.includes("/")) {
-		const found = await new Promise<string | null>((res) => {
-			exec(
-				`mdfind -name ${JSON.stringify(rawPath)} | head -1`,
-				(err, stdout) => {
-					if (err || !stdout.trim()) {res(null);}
-					else {res(stdout.trim().split("\n")[0]);}
-				},
-			);
-		});
-		if (found && existsSync(found)) {
-			resolved = found;
-		}
+	const resolved = safeResolvePath(rawPath);
+	if (!resolved) {
+		return Response.json(
+			{ error: "File not found or path traversal rejected" },
+			{ status: 404 },
+		);
 	}
 
 	if (!existsSync(resolved)) {
@@ -64,34 +50,31 @@ export async function POST(req: Request) {
 	const platform = process.platform;
 	const reveal = body.reveal === true;
 
-	let cmd: string;
 	if (platform === "darwin") {
-		// macOS: use `open` — `-R` reveals in Finder instead of opening
-		cmd = reveal
-			? `open -R ${JSON.stringify(resolved)}`
-			: `open ${JSON.stringify(resolved)}`;
+		const args = reveal ? ["-R", resolved] : [resolved];
+		try {
+			await execFileAsync("open", args);
+			return Response.json({ ok: true, path: resolved });
+		} catch (error) {
+			return Response.json(
+				{ error: `Failed to open file: ${error instanceof Error ? error.message : String(error)}` },
+				{ status: 500 },
+			);
+		}
 	} else if (platform === "linux") {
-		// Linux: xdg-open (no reveal equivalent)
-		cmd = `xdg-open ${JSON.stringify(resolved)}`;
+		try {
+			await execFileAsync("xdg-open", [resolved]);
+			return Response.json({ ok: true, path: resolved });
+		} catch (error) {
+			return Response.json(
+				{ error: `Failed to open file: ${error instanceof Error ? error.message : String(error)}` },
+				{ status: 500 },
+			);
+		}
 	} else {
 		return Response.json(
 			{ error: `Unsupported platform: ${platform}` },
 			{ status: 400 },
 		);
 	}
-
-	return new Promise<Response>((res) => {
-		exec(cmd, (error) => {
-			if (error) {
-				res(
-					Response.json(
-						{ error: `Failed to open file: ${error.message}` },
-						{ status: 500 },
-					),
-				);
-			} else {
-				res(Response.json({ ok: true, path: resolved }));
-			}
-		});
-	});
 }

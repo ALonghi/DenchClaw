@@ -1,9 +1,10 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import {
-  resolveFilesystemPath,
+  resolveWorkspacePath,
   resolveWorkspaceRoot,
   isProtectedSystemPath,
+  safeResolvePath,
 } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
@@ -46,16 +47,12 @@ const MIME_MAP: Record<string, string> = {
 
 /**
  * Resolve a file path, trying multiple strategies:
- * 1. Absolute path — the agent may read files from anywhere on the local machine
- *    (Photos library, Downloads, etc.), so we serve any readable absolute path.
- * 2. Workspace-relative via safeResolvePath
- * 3. Bare filename — search common workspace subdirectories
- *
- * Security note: this is a local-only dev server; it never runs in production.
+ * 1. Workspace-relative path via safeResolvePath
+ * 2. Bare filename — search common workspace subdirectories
  */
 function resolveFile(path: string): string | null {
-	const resolvedPath = resolveFilesystemPath(path);
-	if (resolvedPath) {return resolvedPath.absolutePath;}
+	const resolvedPath = safeResolvePath(path);
+	if (resolvedPath) {return resolvedPath;}
 
 	// 2. Try common subdirectories in case the path is a bare filename
 	const root = resolveWorkspaceRoot();
@@ -135,7 +132,7 @@ export async function POST(req: Request) {
 		return new Response("Missing path", { status: 400 });
 	}
 
-	const targetPath = resolveFilesystemPath(path, { allowMissing: true });
+	const targetPath = resolveWorkspacePath(path, { allowMissing: true });
 	if (isProtectedSystemPath(targetPath)) {
 		return Response.json({ error: "Cannot modify system file" }, { status: 403 });
 	}

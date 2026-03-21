@@ -7,6 +7,7 @@ vi.mock("node:fs", () => ({
 
 vi.mock("@/lib/workspace", () => ({
 	resolveFilesystemPath: vi.fn(),
+	resolveWorkspacePath: vi.fn(),
 	isProtectedSystemPath: vi.fn(() => false),
 }));
 
@@ -19,6 +20,7 @@ describe("POST /api/workspace/write-binary", () => {
 		}));
 		vi.mock("@/lib/workspace", () => ({
 			resolveFilesystemPath: vi.fn(),
+			resolveWorkspacePath: vi.fn(),
 			isProtectedSystemPath: vi.fn(() => false),
 		}));
 	});
@@ -67,8 +69,8 @@ describe("POST /api/workspace/write-binary", () => {
 	});
 
 	it("returns 403 when writing a system file (prevents protected-file tampering)", async () => {
-		const { resolveFilesystemPath, isProtectedSystemPath } = await import("@/lib/workspace");
-		vi.mocked(resolveFilesystemPath).mockReturnValueOnce({
+		const { resolveWorkspacePath, isProtectedSystemPath } = await import("@/lib/workspace");
+		vi.mocked(resolveWorkspacePath).mockReturnValueOnce({
 			absolutePath: "/ws/workspace.duckdb",
 			kind: "workspaceRelative",
 			withinWorkspace: true,
@@ -89,8 +91,8 @@ describe("POST /api/workspace/write-binary", () => {
 	});
 
 	it("returns 400 when path resolution fails (blocks path traversal attacks)", async () => {
-		const { resolveFilesystemPath } = await import("@/lib/workspace");
-		vi.mocked(resolveFilesystemPath).mockReturnValueOnce(null);
+		const { resolveWorkspacePath } = await import("@/lib/workspace");
+		vi.mocked(resolveWorkspacePath).mockReturnValueOnce(null);
 
 		const { POST } = await import("./write-binary/route.js");
 		const form = new FormData();
@@ -107,8 +109,8 @@ describe("POST /api/workspace/write-binary", () => {
 	});
 
 	it("writes binary bytes exactly to the resolved destination", async () => {
-		const { resolveFilesystemPath } = await import("@/lib/workspace");
-		vi.mocked(resolveFilesystemPath).mockReturnValueOnce({
+		const { resolveWorkspacePath } = await import("@/lib/workspace");
+		vi.mocked(resolveWorkspacePath).mockReturnValueOnce({
 			absolutePath: "/ws/docs/report.docx",
 			kind: "workspaceRelative",
 			withinWorkspace: true,
@@ -141,16 +143,9 @@ describe("POST /api/workspace/write-binary", () => {
 		expect(written[4]).toBe(0xff);
 	});
 
-	it("writes absolute browse-mode DOCX paths outside the workspace", async () => {
-		const { resolveFilesystemPath } = await import("@/lib/workspace");
-		vi.mocked(resolveFilesystemPath).mockReturnValueOnce({
-			absolutePath: "/tmp/report.docx",
-			kind: "absolute",
-			withinWorkspace: false,
-			workspaceRelativePath: null,
-		});
-		const { writeFileSync: mockWrite } = await import("node:fs");
-
+	it("rejects absolute browse-mode DOCX paths outside the workspace", async () => {
+		const { resolveWorkspacePath } = await import("@/lib/workspace");
+		vi.mocked(resolveWorkspacePath).mockReturnValueOnce(null);
 		const { POST } = await import("./write-binary/route.js");
 		const form = new FormData();
 		form.append("path", "/tmp/report.docx");
@@ -161,13 +156,12 @@ describe("POST /api/workspace/write-binary", () => {
 		});
 		const res = await POST(req);
 
-		expect(res.status).toBe(200);
-		expect(mockWrite).toHaveBeenCalledWith("/tmp/report.docx", expect.any(Buffer));
+		expect(res.status).toBe(400);
 	});
 
 	it("returns 500 when disk write throws (surfaces actionable failure)", async () => {
-		const { resolveFilesystemPath } = await import("@/lib/workspace");
-		vi.mocked(resolveFilesystemPath).mockReturnValueOnce({
+		const { resolveWorkspacePath } = await import("@/lib/workspace");
+		vi.mocked(resolveWorkspacePath).mockReturnValueOnce({
 			absolutePath: "/ws/docs/report.docx",
 			kind: "workspaceRelative",
 			withinWorkspace: true,

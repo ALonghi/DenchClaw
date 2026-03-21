@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, statSync } from "node:fs";
-import { resolveFilesystemPath } from "@/lib/workspace";
+import { resolveWorkspacePath } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -44,7 +44,7 @@ export async function GET(req: Request) {
 		);
 	}
 
-	const resolvedPath = resolveFilesystemPath(filePath);
+	const resolvedPath = resolveWorkspacePath(filePath);
 	if (!resolvedPath) {
 		return Response.json(
 			{ error: "File not found" },

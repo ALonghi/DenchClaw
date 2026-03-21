@@ -1,8 +1,49 @@
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
+
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const PRIVATE_IP =
-  /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|0\.|localhost|::1|\[::1\])/i;
+const ALLOWED_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]);
+const LOOPBACK_HOSTS = new Set(["localhost", "localhost."]);
+
+function isPrivateIpv4(host: string): boolean {
+  return /^(127\.|10\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(host);
+}
+
+function isPrivateIpv6(host: string): boolean {
+  const normalized = host.toLowerCase();
+  return normalized === "::1" || normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd");
+}
+
+function isPrivateHost(host: string): boolean {
+  const normalized = host.replace(/^\[(.*)\]$/, "$1").toLowerCase();
+  if (LOOPBACK_HOSTS.has(normalized)) {return true;}
+  const family = isIP(normalized);
+  if (family === 4) {return isPrivateIpv4(normalized);}
+  if (family === 6) {return isPrivateIpv6(normalized);}
+  return false;
+}
+
+async function assertPublicDestination(url: URL): Promise<void> {
+  if (!["http:", "https:"].includes(url.protocol)) {
+    throw new Error("Only http and https URLs are allowed");
+  }
+  if (url.username || url.password) {
+    throw new Error("Credentials in URLs are not allowed");
+  }
+  if (isPrivateHost(url.hostname)) {
+    throw new Error("Requests to private/local addresses are not allowed");
+  }
+  if (isIP(url.hostname)) {
+    return;
+  }
+
+  const records = await lookup(url.hostname, { all: true, verbatim: true });
+  if (records.length === 0 || records.some((record) => isPrivateHost(record.address))) {
+    throw new Error("Requests to private/local addresses are not allowed");
+  }
+}
 
 export async function POST(req: Request) {
   let body: {
@@ -32,20 +73,28 @@ export async function POST(req: Request) {
     return Response.json({ error: "Invalid URL" }, { status: 400 });
   }
 
-  if (PRIVATE_IP.test(parsed.hostname)) {
+  const method = typeof body.method === "string" ? body.method.toUpperCase() : "GET";
+  if (!ALLOWED_METHODS.has(method)) {
+    return Response.json({ error: "HTTP method not allowed" }, { status: 400 });
+  }
+
+  try {
+    await assertPublicDestination(parsed);
+  } catch (err) {
     return Response.json(
-      { error: "Requests to private/local addresses are not allowed" },
+      { error: err instanceof Error ? err.message : "Request blocked" },
       { status: 403 },
     );
   }
 
   try {
     const resp = await fetch(url, {
-      method: body.method || "GET",
+      method,
       headers: body.headers || {},
-      body: body.method && body.method !== "GET" && body.method !== "HEAD"
+      body: method !== "GET" && method !== "HEAD"
         ? body.body
         : undefined,
+      redirect: "manual",
     });
 
     const respBody = await resp.text();
