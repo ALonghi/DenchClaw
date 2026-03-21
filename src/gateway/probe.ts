@@ -97,13 +97,21 @@ export async function probeGatewayConnection(params: {
 
       if (frame.event === "hello" && typeof frame.nonce === "string") {
         challengeNonce = frame.nonce;
-        const paramsPayload = buildConnectParams(params.settings, {
-          clientMode: "probe",
-          nonce: challengeNonce,
-          deviceIdentity,
-          deviceToken: deviceAuth?.token ?? null,
-        });
-        ws.send(JSON.stringify({ type: "req", id: "probe-connect", method: "connect", params: paramsPayload }));
+        try {
+          const paramsPayload = buildConnectParams(params.settings, {
+            clientMode: "probe",
+            nonce: challengeNonce,
+            deviceIdentity,
+            deviceToken: deviceAuth?.token ?? null,
+          });
+          ws.send(JSON.stringify({ type: "req", id: "probe-connect", method: "connect", params: paramsPayload }));
+        } catch (err) {
+          const message =
+            err instanceof Error && typeof err.message === "string" && err.message.trim()
+              ? err.message
+              : "Failed to build gateway connect parameters.";
+          finish({ ok: false, detail: message });
+        }
         return;
       }
 
