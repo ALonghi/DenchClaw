@@ -30,8 +30,13 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV HOME=/home/node
 ENV DENCHCLAW_DAEMONLESS=1
+ENV DENCHCLAW_TELEMETRY_DISABLED=1
+ENV DO_NOT_TRACK=1
 
-RUN corepack enable \
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends lsof \
+ && rm -rf /var/lib/apt/lists/* \
+ && corepack enable \
  && mkdir -p /home/node/.openclaw-dench \
  && chown -R node:node /app /home/node
 
