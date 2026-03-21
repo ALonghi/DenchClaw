@@ -5,8 +5,10 @@ import {
   buildDenchGatewayCatalogUrl,
   cloneFallbackDenchCloudModels,
   DEFAULT_DENCH_CLOUD_GATEWAY_URL,
+  formatDenchCloudModelHint,
   normalizeDenchCloudCatalogResponse,
   normalizeDenchGatewayUrl,
+  resolveDenchCloudModel,
   type DenchCloudCatalogModel,
 } from "./models.js";
 
@@ -15,6 +17,7 @@ export const id = "dench-ai-gateway";
 const PROVIDER_ID = "dench-cloud";
 const PROVIDER_LABEL = "Dench Cloud";
 const API_KEY_ENV_VARS = ["DENCH_CLOUD_API_KEY", "DENCH_API_KEY"] as const;
+const DEFAULT_PUBLIC_PROVIDER_TOKEN = "dench-public";
 
 type CatalogSource = "live" | "fallback";
 
@@ -37,7 +40,8 @@ function resolvePluginConfig(api: any): UnknownRecord | undefined {
 
 function resolveGatewayUrl(api: any): string {
   const pluginConfig = resolvePluginConfig(api);
-  const configured = typeof pluginConfig?.gatewayUrl === "string" ? pluginConfig.gatewayUrl : undefined;
+  const configured =
+    typeof pluginConfig?.gatewayUrl === "string" ? pluginConfig.gatewayUrl : undefined;
   return normalizeDenchGatewayUrl(
     configured || process.env.DENCH_GATEWAY_URL || DEFAULT_DENCH_CLOUD_GATEWAY_URL,
   );
@@ -61,6 +65,7 @@ function buildProviderConfig(
   return {
     baseUrl: buildDenchGatewayApiBaseUrl(gatewayUrl),
     ...(apiKey ? { apiKey } : {}),
+    ...(apiKey ? {} : { authHeader: false }),
     api: "openai-completions",
     models: buildDenchCloudProviderModels(models),
   };
@@ -110,12 +115,49 @@ export async function fetchDenchCloudCatalog(gatewayUrl: string): Promise<Catalo
   }
 }
 
-function buildAuthNotes(params: {
-  gatewayUrl: string;
-  catalog: CatalogLoadResult;
-}): string[] {
+function resolveConfiguredModel(api: any): string | undefined {
+  const defaults = asRecord(asRecord(asRecord(api?.config)?.agents)?.defaults);
+  const modelValue = defaults?.model;
+  const modelRecord = asRecord(modelValue);
+  const modelRef =
+    typeof modelValue === "string"
+      ? modelValue
+      : typeof modelRecord?.primary === "string"
+        ? modelRecord.primary
+        : undefined;
+  return typeof modelRef === "string" && modelRef.startsWith(`${PROVIDER_ID}/`)
+    ? modelRef.slice(`${PROVIDER_ID}/`.length)
+    : undefined;
+}
+
+async function promptForModelSelection(params: {
+  prompter: any;
+  models: DenchCloudCatalogModel[];
+  initialStableId?: string;
+}): Promise<DenchCloudCatalogModel> {
+  const selectedStableId = String(
+    await params.prompter.select({
+      message: "Choose your default Dench Cloud model",
+      options: params.models.map((model) => ({
+        value: model.stableId,
+        label: model.displayName,
+        hint: formatDenchCloudModelHint(model),
+      })),
+      ...(params.initialStableId ? { initialValue: params.initialStableId } : {}),
+    }),
+  );
+
+  const selected = resolveDenchCloudModel(params.models, selectedStableId);
+  if (!selected) {
+    throw new Error(`Unknown Dench Cloud model "${selectedStableId}".`);
+  }
+  return selected;
+}
+
+function buildSetupNotes(params: { gatewayUrl: string; catalog: CatalogLoadResult }): string[] {
   const notes = [
     `Dench Cloud uses ${buildDenchGatewayApiBaseUrl(params.gatewayUrl)} for model traffic.`,
+    "This provider uses Dench's public gateway flow and does not require an API key by default.",
   ];
 
   if (params.catalog.source === "fallback") {
@@ -125,6 +167,70 @@ function buildAuthNotes(params: {
   }
 
   return notes;
+}
+
+function buildProviderSetupResult(params: {
+  gatewayUrl: string;
+  catalog: CatalogLoadResult;
+  selected: DenchCloudCatalogModel;
+  apiKey?: string;
+}) {
+  return {
+    profiles: [
+      {
+        profileId: `${PROVIDER_ID}:default`,
+        credential: {
+          type: "token",
+          provider: PROVIDER_ID,
+          token: params.apiKey || DEFAULT_PUBLIC_PROVIDER_TOKEN,
+        },
+      },
+    ],
+    defaultModel: `${PROVIDER_ID}/${params.selected.stableId}`,
+    configPatch: buildDenchCloudConfigPatch({
+      gatewayUrl: params.gatewayUrl,
+      models: params.catalog.models,
+      apiKey: params.apiKey,
+    }),
+    notes: buildSetupNotes({
+      gatewayUrl: params.gatewayUrl,
+      catalog: params.catalog,
+    }),
+  };
+}
+
+async function runInteractiveSetup(ctx: any, api: any, gatewayUrl: string) {
+  const catalog = await fetchDenchCloudCatalog(gatewayUrl);
+  const selected = await promptForModelSelection({
+    prompter: ctx.prompter,
+    models: catalog.models,
+    initialStableId: resolveConfiguredModel(api),
+  });
+
+  return buildProviderSetupResult({
+    gatewayUrl,
+    catalog,
+    selected,
+    apiKey: resolveEnvApiKey(),
+  });
+}
+
+async function runNonInteractiveSetup(ctx: any, gatewayUrl: string) {
+  const catalog = await fetchDenchCloudCatalog(gatewayUrl);
+  const selected = resolveDenchCloudModel(
+    catalog.models,
+    String(ctx?.opts?.denchCloudModel || process.env.DENCH_CLOUD_MODEL || "").trim(),
+  );
+  if (!selected) {
+    throw new Error("Configured Dench Cloud model is not available.");
+  }
+
+  return buildProviderSetupResult({
+    gatewayUrl,
+    catalog,
+    selected,
+    apiKey: resolveEnvApiKey(),
+  });
 }
 
 async function buildDiscoveryProvider(api: any, gatewayUrl: string) {
@@ -151,6 +257,16 @@ export default function register(api: any) {
     docsPath: "/providers/models",
     aliases: ["dench", "dench-cloud", "dench-ai-gateway"],
     envVars: [...API_KEY_ENV_VARS],
+    auth: [
+      {
+        id: "public-gateway",
+        label: "Dench Cloud",
+        hint: "Choose a Dench Cloud model and configure the public gateway",
+        kind: "custom",
+        run: async (ctx: any) => await runInteractiveSetup(ctx, api, gatewayUrl),
+        runNonInteractive: async (ctx: any) => await runNonInteractiveSetup(ctx, gatewayUrl),
+      },
+    ],
     // Best-effort discovery so newer OpenClaw builds can rehydrate provider config.
     discovery: {
       order: "profile",
