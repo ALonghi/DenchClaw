@@ -28,7 +28,7 @@ export function normalizeExternalGatewayUrl(raw: string): string {
   try {
     parsed = new URL(raw);
   } catch {
-    throw new Error(`Invalid OPENCLAW_GATEWAY_URL: ${raw}`);
+    throw new Error("Invalid OPENCLAW_GATEWAY_URL.");
   }
 
   if (parsed.protocol === "http:") {
@@ -38,6 +38,12 @@ export function normalizeExternalGatewayUrl(raw: string): string {
   } else if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
     throw new Error(
       `Invalid OPENCLAW_GATEWAY_URL protocol "${parsed.protocol}". Use ws:// or wss://.`,
+    );
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new Error(
+      "OPENCLAW_GATEWAY_URL must not include embedded credentials. Use OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD instead.",
     );
   }
 

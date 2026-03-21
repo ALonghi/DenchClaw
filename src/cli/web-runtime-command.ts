@@ -275,15 +275,17 @@ async function ensureMajorUpgradeAcknowledged(params: {
   nonInteractive: boolean;
   yes: boolean;
   runtime: RuntimeEnv;
+  approvalLabel?: string;
 }): Promise<void> {
   if (!params.required) {
     return;
   }
+  const approvalLabel = params.approvalLabel ?? "OpenClaw update";
 
   if (params.nonInteractive || !process.stdin.isTTY) {
     if (!params.yes) {
       throw new Error(
-        `Major Dench upgrade detected (${params.previousVersion ?? "unknown"} -> ${params.currentVersion}). Re-run with --yes to approve the required OpenClaw update.`,
+        `Major Dench upgrade detected (${params.previousVersion ?? "unknown"} -> ${params.currentVersion}). Re-run with --yes to approve the required ${approvalLabel}.`,
       );
     }
     return;
@@ -295,15 +297,15 @@ async function ensureMajorUpgradeAcknowledged(params: {
 
   const decision = await confirm({
     message: stylePromptMessage(
-      `Major Dench upgrade detected (${params.previousVersion ?? "unknown"} -> ${params.currentVersion}). Continue with mandatory OpenClaw update now?`,
+      `Major Dench upgrade detected (${params.previousVersion ?? "unknown"} -> ${params.currentVersion}). Continue with mandatory ${approvalLabel} now?`,
     ),
     initialValue: true,
   });
   if (isCancel(decision) || !decision) {
     params.runtime.log(
-      theme.warn("Update cancelled. OpenClaw update is required for major upgrades."),
+      theme.warn(`Update cancelled. ${approvalLabel} is required for major upgrades.`),
     );
-    throw new Error("Major upgrade requires OpenClaw update approval.");
+    throw new Error(`Major upgrade requires ${approvalLabel} approval.`);
   }
 }
 
@@ -416,19 +418,19 @@ export async function updateWebRuntimeCommand(
     previousVersion: previousManifest?.deployedDenchVersion,
     currentVersion: VERSION,
   });
+  const daemonless = isDaemonlessMode(opts);
+  const gatewayMode = resolveLifecycleGatewayMode({ daemonless, stateDir });
 
   const nonInteractive = Boolean(opts.nonInteractive || opts.json);
   await ensureMajorUpgradeAcknowledged({
-    required: transition.isMajorTransition,
+    required: transition.isMajorTransition && !gatewayMode.enabled,
     previousVersion: previousManifest?.deployedDenchVersion,
     currentVersion: VERSION,
     nonInteractive,
     yes: Boolean(opts.yes),
     runtime,
+    approvalLabel: "OpenClaw update",
   });
-
-  const daemonless = isDaemonlessMode(opts);
-  const gatewayMode = resolveLifecycleGatewayMode({ daemonless, stateDir });
 
   if (transition.isMajorTransition && !gatewayMode.enabled) {
     const openclawCommand = resolveOpenClawCommandOrThrow();

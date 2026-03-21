@@ -53,6 +53,7 @@ export async function probeGatewayConnection(params: {
 
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
+    let successfulResponse = false;
     let challengeNonce: string | null = null;
     const ws = new WebSocket(params.settings.url);
 
@@ -116,6 +117,7 @@ export async function probeGatewayConnection(params: {
       }
 
       if (frame.type === "res" && frame.ok === true) {
+        successfulResponse = true;
         finish({ ok: true });
         return;
       }
@@ -131,13 +133,15 @@ export async function probeGatewayConnection(params: {
 
     ws.addEventListener("close", (event) => {
       if (!settled) {
-        if (event.code === 1000) {
+        if (successfulResponse) {
           finish({ ok: true });
           return;
         }
         finish({
           ok: false,
-          detail: event.reason || `Gateway connection closed (${event.code}).`,
+          detail:
+            event.reason ||
+            `Gateway connection closed before probe completed (${event.code}).`,
         });
       }
     });
