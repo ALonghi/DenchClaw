@@ -1,6 +1,8 @@
 node_modules
 **/node_modules/
 .env
+.env.denchclaw
+.env.denchclaw.local
 docker-compose.extra.yml
 dist
 pnpm-lock.yaml

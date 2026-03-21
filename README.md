@@ -98,6 +98,19 @@ export OPENCLAW_GATEWAY_TOKEN=...
 export OPENCLAW_GATEWAY_PASSWORD=...
 ```
 
+For Docker deployments, prefer an env file instead of exporting secrets in your shell:
+
+```bash
+cp .env.denchclaw.example .env.denchclaw
+chmod 600 .env.denchclaw
+```
+
+Then set your values in `.env.denchclaw` and start the container with:
+
+```bash
+docker compose up -d --build
+```
+
 Notes:
 
 - External mode is enabled only when both daemonless mode and `OPENCLAW_GATEWAY_URL` are set.
@@ -108,13 +121,9 @@ Notes:
 Example deployment:
 
 ```bash
-export DENCHCLAW_DAEMONLESS=1
-export OPENCLAW_GATEWAY_URL=ws://openclaw:19001
-
-# Optional if the remote gateway requires auth
-export OPENCLAW_GATEWAY_PASSWORD=supersecret
-
-npx denchclaw bootstrap --skip-daemon-install
+cp .env.denchclaw.example .env.denchclaw
+# edit .env.denchclaw
+docker compose up -d --build
 ```
 
 ---
