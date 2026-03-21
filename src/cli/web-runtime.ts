@@ -533,6 +533,28 @@ function dereferenceRuntimeNodeModules(
   resolveRemainingSymlinks(nmDir, rootNm);
 }
 
+function pathExistsIncludingDangling(filePath: string): boolean {
+  try {
+    lstatSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function replacePathWithCopy(src: string, dst: string): boolean {
+  try {
+    if (pathExistsIncludingDangling(dst)) {
+      rmSync(dst, { recursive: true, force: true });
+    }
+    mkdirSync(path.dirname(dst), { recursive: true });
+    cpSync(src, dst, { recursive: true, dereference: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function mergeRootNodeModules(targetNm: string, rootNm: string): void {
   if (!existsSync(rootNm)) return;
 
@@ -556,27 +578,28 @@ function mergeRootNodeModules(targetNm: string, rootNm: string): void {
       }
       for (const pkg of scopeEntries) {
         const dst = path.join(targetNm, entry, pkg);
-        if (existsSync(dst) && !lstatSync(dst).isSymbolicLink()) continue;
         const scopeSrc = path.join(src, pkg);
-        try {
-          rmSync(dst, { recursive: true, force: true });
-          mkdirSync(path.join(targetNm, entry), { recursive: true });
-          cpSync(scopeSrc, dst, { recursive: true, dereference: true, force: true });
-        } catch {
-          // best-effort
+        if (pathExistsIncludingDangling(dst)) {
+          try {
+            if (!lstatSync(dst).isSymbolicLink()) continue;
+          } catch {
+            // A race removed the path; continue with copy.
+          }
         }
+        replacePathWithCopy(scopeSrc, dst);
       }
       continue;
     }
 
     const dst = path.join(targetNm, entry);
-    if (existsSync(dst) && !lstatSync(dst).isSymbolicLink()) continue;
-    try {
-      rmSync(dst, { recursive: true, force: true });
-      cpSync(src, dst, { recursive: true, dereference: true, force: true });
-    } catch {
-      // best-effort
+    if (pathExistsIncludingDangling(dst)) {
+      try {
+        if (!lstatSync(dst).isSymbolicLink()) continue;
+      } catch {
+        // A race removed the path; continue with copy.
+      }
     }
+    replacePathWithCopy(src, dst);
   }
 }
 
@@ -638,8 +661,7 @@ function resolveSymlinkedPackage(
       : path.resolve(path.dirname(linkPath), target);
 
     if (existsSync(resolved)) {
-      rmSync(linkPath, { force: true });
-      cpSync(resolved, linkPath, { recursive: true, dereference: true, force: true });
+      replacePathWithCopy(resolved, linkPath);
       return;
     }
   } catch {
@@ -648,12 +670,7 @@ function resolveSymlinkedPackage(
 
   const fallback = path.join(rootNm, packageName);
   if (existsSync(fallback)) {
-    try {
-      rmSync(linkPath, { force: true });
-      cpSync(fallback, linkPath, { recursive: true, dereference: true, force: true });
-    } catch {
-      // best-effort
-    }
+    replacePathWithCopy(fallback, linkPath);
     return;
   }
 
@@ -786,7 +803,7 @@ export function installManagedWebRuntime(params: {
     }
   }
 
-  cpSync(sourceAppDir, runtimeAppDir, { recursive: true, force: true, dereference: true });
+  cpSync(sourceAppDir, runtimeAppDir, { recursive: true, force: true, dereference: false });
 
   dereferenceRuntimeNodeModules(runtimeAppDir, standaloneDir);
   ensureStaticAssets(runtimeAppDir, params.packageRoot);

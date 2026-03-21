@@ -52,31 +52,25 @@
     "web:build": "pnpm --dir apps/web build",
     "web:dev": "pnpm --dir apps/web dev",
     "web:install": "pnpm --dir apps/web install",
-    "web:prepack": "cp -r apps/web/public apps/web/.next/standalone/apps/web/public && cp -r apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static && node scripts/flatten-standalone-deps.mjs",
-    "deploy:check": "bash scripts/with-root-env.sh bash scripts/deploy.sh --skip-publish",
-    "deploy": "bash scripts/with-root-env.sh bash scripts/deploy.sh",
-    "deploy:major": "bash scripts/with-root-env.sh bash scripts/deploy.sh --bump major",
-    "deploy:minor": "bash scripts/with-root-env.sh bash scripts/deploy.sh --bump minor",
-    "deploy:patch": "bash scripts/with-root-env.sh bash scripts/deploy.sh --bump patch",
-    "github:sync-secrets": "bash scripts/with-root-env.sh bash scripts/sync-github-secrets.sh"
+    "web:prepack": "cp -r apps/web/public apps/web/.next/standalone/apps/web/public && cp -r apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static && node scripts/flatten-standalone-deps.mjs"
   },
   "dependencies": {
-    "@clack/prompts": "^1.0.1",
+    "@clack/prompts": "^1.1.0",
     "chalk": "^5.6.2",
     "commander": "^14.0.3",
     "gradient-string": "^3.0.0",
     "json5": "^2.2.3",
-    "posthog-node": "^5.27.1",
+    "posthog-node": "^5.28.5",
     "tslog": "^4.10.2"
   },
   "devDependencies": {
-    "@types/node": "^25.3.0",
-    "oxfmt": "0.34.0",
-    "oxlint": "^1.49.0",
-    "oxlint-tsgolint": "^0.14.2",
-    "tsdown": "^0.20.3",
+    "@types/node": "^25.5.0",
+    "oxfmt": "0.41.0",
+    "oxlint": "^1.56.0",
+    "oxlint-tsgolint": "^0.17.1",
+    "tsdown": "^0.21.4",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.0"
   },
   "peerDependencies": {
     "openclaw": ">=2026.1.0"
@@ -84,7 +78,7 @@
   "engines": {
     "node": ">=22.12.0"
   },
-  "packageManager": "pnpm@10.23.0",
+  "packageManager": "pnpm@10.32.1",
   "pnpm": {
     "minimumReleaseAge": 2880
   }

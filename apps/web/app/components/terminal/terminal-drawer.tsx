@@ -182,18 +182,25 @@ function TerminalViewport({
 
       let useProxy = false;
       let wsPort = DEFAULT_WS_PORT;
+      let wsToken = "";
       try {
         const res = await fetch("/api/terminal/port");
         const json = await res.json();
         if (json.port) wsPort = json.port;
         if (json.proxy) useProxy = true;
+        if (typeof json.token === "string") wsToken = json.token;
       } catch {}
 
       if (disposed) return;
 
+      if (!wsToken) {
+        terminal.write("\r\n\x1b[31m[terminal] auth token unavailable\x1b[0m\r\n");
+        return;
+      }
+
       const wsUrl = useProxy
-        ? `${protocol}//${window.location.host}/terminal-ws/`
-        : `${protocol}//127.0.0.1:${wsPort}`;
+        ? `${protocol}//${window.location.host}/terminal-ws/?token=${encodeURIComponent(wsToken)}`
+        : `${protocol}//127.0.0.1:${wsPort}?token=${encodeURIComponent(wsToken)}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 

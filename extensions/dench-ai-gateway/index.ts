@@ -17,6 +17,7 @@ export const id = "dench-ai-gateway";
 const PROVIDER_ID = "dench-cloud";
 const PROVIDER_LABEL = "Dench Cloud";
 const API_KEY_ENV_VARS = ["DENCH_CLOUD_API_KEY", "DENCH_API_KEY"] as const;
+const DEFAULT_PUBLIC_PROVIDER_TOKEN = "dench-public";
 
 type CatalogSource = "live" | "fallback";
 
@@ -39,7 +40,8 @@ function resolvePluginConfig(api: any): UnknownRecord | undefined {
 
 function resolveGatewayUrl(api: any): string {
   const pluginConfig = resolvePluginConfig(api);
-  const configured = typeof pluginConfig?.gatewayUrl === "string" ? pluginConfig.gatewayUrl : undefined;
+  const configured =
+    typeof pluginConfig?.gatewayUrl === "string" ? pluginConfig.gatewayUrl : undefined;
   return normalizeDenchGatewayUrl(
     configured || process.env.DENCH_GATEWAY_URL || DEFAULT_DENCH_CLOUD_GATEWAY_URL,
   );
@@ -57,12 +59,13 @@ function resolveEnvApiKey(): string | undefined {
 
 function buildProviderConfig(
   gatewayUrl: string,
-  apiKey: string,
   models: DenchCloudCatalogModel[],
+  apiKey?: string,
 ) {
   return {
     baseUrl: buildDenchGatewayApiBaseUrl(gatewayUrl),
-    apiKey,
+    ...(apiKey ? { apiKey } : {}),
+    ...(apiKey ? {} : { authHeader: false }),
     api: "openai-completions",
     models: buildDenchCloudProviderModels(models),
   };
@@ -70,14 +73,14 @@ function buildProviderConfig(
 
 export function buildDenchCloudConfigPatch(params: {
   gatewayUrl: string;
-  apiKey: string;
   models: DenchCloudCatalogModel[];
+  apiKey?: string;
 }) {
   return {
     models: {
       mode: "merge",
       providers: {
-        [PROVIDER_ID]: buildProviderConfig(params.gatewayUrl, params.apiKey, params.models),
+        [PROVIDER_ID]: buildProviderConfig(params.gatewayUrl, params.models, params.apiKey),
       },
     },
     agents: {
@@ -86,23 +89,6 @@ export function buildDenchCloudConfigPatch(params: {
       },
     },
   };
-}
-
-async function promptForApiKey(prompter: any): Promise<string> {
-  if (typeof prompter?.secret === "function") {
-    return String(
-      await prompter.secret(
-        "Enter your Dench Cloud API key (sign up at dench.com and get it at dench.com/settings)",
-      ),
-    ).trim();
-  }
-
-  return String(
-    await prompter.text({
-      message:
-        "Enter your Dench Cloud API key (sign up at dench.com and get it at dench.com/settings)",
-    }),
-  ).trim();
 }
 
 export async function fetchDenchCloudCatalog(gatewayUrl: string): Promise<CatalogLoadResult> {
@@ -129,25 +115,19 @@ export async function fetchDenchCloudCatalog(gatewayUrl: string): Promise<Catalo
   }
 }
 
-export async function validateDenchCloudApiKey(
-  gatewayUrl: string,
-  apiKey: string,
-): Promise<void> {
-  const response = await fetch(`${buildDenchGatewayApiBaseUrl(gatewayUrl)}/models`, {
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-    },
-  });
-
-  if (response.ok) {
-    return;
-  }
-
-  const message =
-    response.status === 401 || response.status === 403
-      ? "Invalid Dench Cloud API key."
-      : `Dench Cloud validation failed with HTTP ${response.status}.`;
-  throw new Error(`${message} Check your key at dench.com/settings.`);
+function resolveConfiguredModel(api: any): string | undefined {
+  const defaults = asRecord(asRecord(asRecord(api?.config)?.agents)?.defaults);
+  const modelValue = defaults?.model;
+  const modelRecord = asRecord(modelValue);
+  const modelRef =
+    typeof modelValue === "string"
+      ? modelValue
+      : typeof modelRecord?.primary === "string"
+        ? modelRecord.primary
+        : undefined;
+  return typeof modelRef === "string" && modelRef.startsWith(`${PROVIDER_ID}/`)
+    ? modelRef.slice(`${PROVIDER_ID}/`.length)
+    : undefined;
 }
 
 async function promptForModelSelection(params: {
@@ -174,12 +154,10 @@ async function promptForModelSelection(params: {
   return selected;
 }
 
-function buildAuthNotes(params: {
-  gatewayUrl: string;
-  catalog: CatalogLoadResult;
-}): string[] {
+function buildSetupNotes(params: { gatewayUrl: string; catalog: CatalogLoadResult }): string[] {
   const notes = [
     `Dench Cloud uses ${buildDenchGatewayApiBaseUrl(params.gatewayUrl)} for model traffic.`,
+    "This provider uses Dench's public gateway flow and does not require an API key by default.",
   ];
 
   if (params.catalog.source === "fallback") {
@@ -191,71 +169,53 @@ function buildAuthNotes(params: {
   return notes;
 }
 
-function buildProviderAuthResult(params: {
+function buildProviderSetupResult(params: {
   gatewayUrl: string;
-  apiKey: string;
   catalog: CatalogLoadResult;
   selected: DenchCloudCatalogModel;
+  apiKey?: string;
 }) {
   return {
     profiles: [
       {
         profileId: `${PROVIDER_ID}:default`,
         credential: {
-          type: "api_key",
+          type: "token",
           provider: PROVIDER_ID,
-          key: params.apiKey,
+          token: params.apiKey || DEFAULT_PUBLIC_PROVIDER_TOKEN,
         },
       },
     ],
     defaultModel: `${PROVIDER_ID}/${params.selected.stableId}`,
     configPatch: buildDenchCloudConfigPatch({
       gatewayUrl: params.gatewayUrl,
-      apiKey: params.apiKey,
       models: params.catalog.models,
+      apiKey: params.apiKey,
     }),
-    notes: buildAuthNotes({
+    notes: buildSetupNotes({
       gatewayUrl: params.gatewayUrl,
       catalog: params.catalog,
     }),
   };
 }
 
-async function runInteractiveAuth(ctx: any, gatewayUrl: string) {
-  const apiKey = await promptForApiKey(ctx.prompter);
-  if (!apiKey) {
-    throw new Error("A Dench Cloud API key is required.");
-  }
-
-  await validateDenchCloudApiKey(gatewayUrl, apiKey);
+async function runInteractiveSetup(ctx: any, api: any, gatewayUrl: string) {
   const catalog = await fetchDenchCloudCatalog(gatewayUrl);
   const selected = await promptForModelSelection({
     prompter: ctx.prompter,
     models: catalog.models,
+    initialStableId: resolveConfiguredModel(api),
   });
 
-  return buildProviderAuthResult({
+  return buildProviderSetupResult({
     gatewayUrl,
-    apiKey,
     catalog,
     selected,
+    apiKey: resolveEnvApiKey(),
   });
 }
 
-async function runNonInteractiveAuth(ctx: any, gatewayUrl: string) {
-  const apiKey = String(
-    ctx?.opts?.denchCloudApiKey ||
-      ctx?.opts?.denchCloudKey ||
-      resolveEnvApiKey() ||
-      "",
-  ).trim();
-  if (!apiKey) {
-    throw new Error(
-      "Dench Cloud non-interactive auth requires DENCH_CLOUD_API_KEY or --dench-cloud-api-key.",
-    );
-  }
-
-  await validateDenchCloudApiKey(gatewayUrl, apiKey);
+async function runNonInteractiveSetup(ctx: any, gatewayUrl: string) {
   const catalog = await fetchDenchCloudCatalog(gatewayUrl);
   const selected = resolveDenchCloudModel(
     catalog.models,
@@ -265,27 +225,22 @@ async function runNonInteractiveAuth(ctx: any, gatewayUrl: string) {
     throw new Error("Configured Dench Cloud model is not available.");
   }
 
-  return buildProviderAuthResult({
+  return buildProviderSetupResult({
     gatewayUrl,
-    apiKey,
     catalog,
     selected,
+    apiKey: resolveEnvApiKey(),
   });
 }
 
-function buildDiscoveryProvider(api: any, gatewayUrl: string) {
+async function buildDiscoveryProvider(api: any, gatewayUrl: string) {
   const configured = api?.config?.models?.providers?.[PROVIDER_ID];
   if (configured && typeof configured === "object") {
     return configured;
   }
 
-  const apiKey = resolveEnvApiKey();
-  if (!apiKey) {
-    return null;
-  }
-
-  const models = cloneFallbackDenchCloudModels();
-  return buildProviderConfig(gatewayUrl, apiKey, models);
+  const catalog = await fetchDenchCloudCatalog(gatewayUrl);
+  return buildProviderConfig(gatewayUrl, catalog.models, resolveEnvApiKey());
 }
 
 export default function register(api: any) {
@@ -304,37 +259,19 @@ export default function register(api: any) {
     envVars: [...API_KEY_ENV_VARS],
     auth: [
       {
-        id: "api-key",
-        label: "Dench Cloud API Key",
-        hint: "Use your Dench Cloud key from dench.com/settings",
-        kind: "api_key",
-        run: async (ctx: any) => await runInteractiveAuth(ctx, gatewayUrl),
-        // Newer OpenClaw builds can call this hook during headless onboarding.
-        runNonInteractive: async (ctx: any) => await runNonInteractiveAuth(ctx, gatewayUrl),
+        id: "public-gateway",
+        label: "Dench Cloud",
+        hint: "Choose a Dench Cloud model and configure the public gateway",
+        kind: "custom",
+        run: async (ctx: any) => await runInteractiveSetup(ctx, api, gatewayUrl),
+        runNonInteractive: async (ctx: any) => await runNonInteractiveSetup(ctx, gatewayUrl),
       },
     ],
-    // Newer OpenClaw builds can surface provider-specific wizard entries.
-    wizard: {
-      onboarding: {
-        choiceId: PROVIDER_ID,
-        choiceLabel: PROVIDER_LABEL,
-        choiceHint: "Use Dench's managed AI gateway",
-        groupId: "dench",
-        groupLabel: "Dench",
-        groupHint: "Managed Dench Cloud models",
-        methodId: "api-key",
-      },
-      modelPicker: {
-        label: PROVIDER_LABEL,
-        hint: "Connect Dench Cloud with your API key",
-        methodId: "api-key",
-      },
-    },
     // Best-effort discovery so newer OpenClaw builds can rehydrate provider config.
     discovery: {
       order: "profile",
       run: async () => {
-        const provider = buildDiscoveryProvider(api, gatewayUrl);
+        const provider = await buildDiscoveryProvider(api, gatewayUrl);
         return provider ? { provider } : null;
       },
     },

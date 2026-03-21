@@ -8,14 +8,13 @@ on:
 
 permissions:
   contents: write
-  id-token: write
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
 
     steps:
@@ -24,36 +23,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.23.0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
-
       - name: Resolve release version
         id: version
         run: |
-          echo "value=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
-
-      - name: Check npm publish status
-        id: npm
-        run: |
-          VERSION="${{ steps.version.outputs.value }}"
-          if npm view "denchclaw@${VERSION}" version >/dev/null 2>&1; then
-            echo "published=true" >> "$GITHUB_OUTPUT"
-            echo "denchclaw@${VERSION} is already published"
-          else
-            echo "published=false" >> "$GITHUB_OUTPUT"
-            echo "denchclaw@${VERSION} is not published yet"
-          fi
+          echo "value=$(python - <<'PY'
+import json
+with open('package.json', 'r', encoding='utf-8') as f:
+    print(json.load(f)['version'])
+PY
+          )" >> "$GITHUB_OUTPUT"
 
       - name: Check GitHub release status
         id: github_release
@@ -68,19 +46,6 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
             echo "${TAG} release does not exist yet"
           fi
-
-      - name: Validate release checks
-        if: steps.npm.outputs.published != 'true'
-        env:
-          POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
-        run: pnpm run deploy:check
-
-      - name: Publish denchclaw to npm
-        if: steps.npm.outputs.published != 'true'
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
-        run: pnpm run deploy -- --skip-tests --skip-build
 
       - name: Create GitHub release
         if: steps.github_release.outputs.exists != 'true'

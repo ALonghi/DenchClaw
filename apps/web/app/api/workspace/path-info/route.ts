@@ -1,15 +1,13 @@
-import { exec } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, normalize, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { basename } from "node:path";
+import { resolveWorkspacePath } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 /**
  * GET /api/workspace/path-info?path=...
- * Resolves and inspects a filesystem path for in-app preview routing.
+ * Resolves and inspects a workspace path for in-app preview routing.
  */
 export async function GET(req: Request) {
 	const url = new URL(req.url);
@@ -22,52 +20,23 @@ export async function GET(req: Request) {
 		);
 	}
 
-	let candidatePath = rawPath;
-
-	// Convert file:// URLs into local paths first.
-	if (candidatePath.startsWith("file://")) {
-		try {
-			candidatePath = fileURLToPath(candidatePath);
-		} catch {
-			return Response.json(
-				{ error: "Invalid file URL" },
-				{ status: 400 },
-			);
-		}
-	}
-
-	// Expand "~/..." to the current user's home directory.
-	const expandedPath = candidatePath.startsWith("~/")
-		? candidatePath.replace(/^~/, homedir())
-		: candidatePath;
-	let resolvedPath = resolve(normalize(expandedPath));
-
-	// If the path doesn't exist and looks like a bare filename, try to locate it
-	// using macOS Spotlight (mdfind).
-	if (!existsSync(resolvedPath) && !rawPath.includes("/")) {
-		const found = await new Promise<string | null>((res) => {
-			exec(
-				`mdfind -name ${JSON.stringify(rawPath)} | head -1`,
-				(err, stdout) => {
-					if (err || !stdout.trim()) {res(null);}
-					else {res(stdout.trim().split("\n")[0]);}
-				},
-			);
-		});
-		if (found && existsSync(found)) {
-			resolvedPath = found;
-		}
-	}
-
-	if (!existsSync(resolvedPath)) {
+	const resolvedPath = resolveWorkspacePath(rawPath);
+	if (!resolvedPath) {
 		return Response.json(
-			{ error: "Path not found", path: resolvedPath },
+			{ error: "Path not found or path traversal rejected" },
+			{ status: 404 },
+		);
+	}
+
+	if (!existsSync(resolvedPath.absolutePath)) {
+		return Response.json(
+			{ error: "Path not found", path: resolvedPath.absolutePath },
 			{ status: 404 },
 		);
 	}
 
 	try {
-		const stat = statSync(resolvedPath);
+		const stat = statSync(resolvedPath.absolutePath);
 		const type = stat.isDirectory()
 			? "directory"
 			: stat.isFile()
@@ -75,13 +44,13 @@ export async function GET(req: Request) {
 				: "other";
 
 		return Response.json({
-			path: resolvedPath,
-			name: basename(resolvedPath) || resolvedPath,
+			path: resolvedPath.absolutePath,
+			name: basename(resolvedPath.absolutePath) || resolvedPath.absolutePath,
 			type,
 		});
 	} catch {
 		return Response.json(
-			{ error: "Cannot stat path", path: resolvedPath },
+			{ error: "Cannot stat path", path: resolvedPath.absolutePath },
 			{ status: 500 },
 		);
 	}

@@ -1,6 +1,6 @@
 import { cpSync, existsSync, statSync } from "node:fs";
 import { dirname, basename, extname } from "node:path";
-import { resolveFilesystemPath, isProtectedSystemPath } from "@/lib/workspace";
+import { resolveWorkspacePath, isProtectedSystemPath } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,7 +28,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const sourceTarget = resolveFilesystemPath(relPath);
+  const sourceTarget = resolveWorkspacePath(relPath);
   if (isProtectedSystemPath(sourceTarget)) {
     return Response.json(
       { error: "Cannot duplicate system file" },
@@ -48,15 +48,16 @@ export async function POST(req: Request) {
     destinationInputPath = destinationPath;
   } else {
     // Auto-generate "name copy.ext" or "name copy" for folders
-    const name = basename(sourceTarget.absolutePath);
-    const dir = dirname(sourceTarget.absolutePath);
+    const sourceRelativePath = sourceTarget.workspaceRelativePath ?? relPath;
+    const name = basename(sourceRelativePath);
+    const dir = dirname(sourceRelativePath);
     const ext = extname(name);
     const stem = ext ? name.slice(0, -ext.length) : name;
     const copyName = ext ? `${stem} copy${ext}` : `${stem} copy`;
     destinationInputPath = dir === "." ? copyName : `${dir}/${copyName}`;
   }
 
-  const destinationTarget = resolveFilesystemPath(destinationInputPath, { allowMissing: true });
+  const destinationTarget = resolveWorkspacePath(destinationInputPath, { allowMissing: true });
   if (!destinationTarget) {
     return Response.json(
       { error: "Invalid destination path" },

@@ -22,9 +22,20 @@ vi.mock("node:child_process", () => ({
     return proc;
   }),
   execSync: vi.fn(() => ""),
+  execFileSync: vi.fn(() => ""),
   exec: vi.fn(
     (
       _cmd: string,
+      _opts: unknown,
+      cb: (err: Error | null, result: { stdout: string }) => void,
+    ) => {
+      cb(null, { stdout: "" });
+    },
+  ),
+  execFile: vi.fn(
+    (
+      _cmd: string,
+      _args: string[],
       _opts: unknown,
       cb: (err: Error | null, result: { stdout: string }) => void,
     ) => {
@@ -155,9 +166,20 @@ describe("subagent runs", () => {
         return proc;
       }),
       execSync: vi.fn(() => ""),
+      execFileSync: vi.fn(() => ""),
       exec: vi.fn(
         (
           _cmd: string,
+          _opts: unknown,
+          cb: (err: Error | null, result: { stdout: string }) => void,
+        ) => {
+          cb(null, { stdout: "" });
+        },
+      ),
+      execFile: vi.fn(
+        (
+          _cmd: string,
+          _args: string[],
           _opts: unknown,
           cb: (err: Error | null, result: { stdout: string }) => void,
         ) => {

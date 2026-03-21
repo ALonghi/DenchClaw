@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import {
   readWorkspaceFile,
   safeResolvePath,
-  resolveFilesystemPath,
+  resolveWorkspacePath,
   isProtectedSystemPath,
 } from "@/lib/workspace";
 
@@ -54,7 +54,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const targetPath = resolveFilesystemPath(relPath, { allowMissing: true });
+  const targetPath = resolveWorkspacePath(relPath, { allowMissing: true });
   if (isProtectedSystemPath(targetPath)) {
     return Response.json(
       { error: "Cannot modify system file" },
@@ -104,7 +104,7 @@ export async function DELETE(req: Request) {
     );
   }
 
-  const targetPath = resolveFilesystemPath(relPath);
+  const targetPath = resolveWorkspacePath(relPath);
   if (isProtectedSystemPath(targetPath)) {
     return Response.json(
       { error: "Cannot delete system file" },

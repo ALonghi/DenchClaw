@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { access, readdir as readdirAsync } from "node:fs/promises";
-import { execSync, exec } from "node:child_process";
+import { execSync, exec, execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { join, resolve, normalize, relative, isAbsolute as isNodeAbsolute } from "node:path";
 import { homedir } from "node:os";
@@ -13,6 +13,7 @@ import {
 } from "./workspace-paths";
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 async function pathExistsAsync(path: string): Promise<boolean> {
   try {
@@ -779,11 +780,17 @@ export function resolveDuckdbBin(): string | null {
 
   // Fallback: try bare `duckdb` and hope it's in PATH
   try {
-    execSync("which duckdb", { encoding: "utf-8", timeout: 2000 });
+    execFileSync("which", ["duckdb"], { encoding: "utf-8", timeout: 2000 });
     return "duckdb";
   } catch {
     return null;
   }
+}
+
+function parseDuckdbJsonRows<T>(raw: string): T[] {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed === "[]") {return [];}
+  return JSON.parse(trimmed) as T[];
 }
 
 /**
@@ -803,18 +810,12 @@ export function duckdbQuery<T = Record<string, unknown>>(
   if (!bin) {return [];}
 
   try {
-    // Escape single quotes in SQL for shell safety
-    const escapedSql = sql.replace(/'/g, "'\\''");
-    const result = execSync(`'${bin}' -json '${db}' '${escapedSql}'`, {
+    const result = execFileSync(bin, ["-json", db, sql], {
       encoding: "utf-8",
       timeout: 10_000,
       maxBuffer: 10 * 1024 * 1024, // 10 MB
-      shell: "/bin/sh",
     });
-
-    const trimmed = result.trim();
-    if (!trimmed || trimmed === "[]") {return [];}
-    return JSON.parse(trimmed) as T[];
+    return parseDuckdbJsonRows<T>(result);
   } catch {
     return [];
   }
@@ -835,17 +836,12 @@ export async function duckdbQueryAsync<T = Record<string, unknown>>(
   if (!bin) {return [];}
 
   try {
-    const escapedSql = sql.replace(/'/g, "'\\''");
-    const { stdout } = await execAsync(`'${bin}' -json '${db}' '${escapedSql}'`, {
+    const { stdout } = await execFileAsync(bin, ["-json", db, sql], {
       encoding: "utf-8",
       timeout: 10_000,
       maxBuffer: 10 * 1024 * 1024,
-      shell: "/bin/sh",
     });
-
-    const trimmed = stdout.trim();
-    if (!trimmed || trimmed === "[]") {return [];}
-    return JSON.parse(trimmed) as T[];
+    return parseDuckdbJsonRows<T>(stdout);
   } catch {
     return [];
   }
@@ -875,16 +871,12 @@ export function duckdbQueryAll<T = Record<string, unknown>>(
 
   for (const db of dbPaths) {
     try {
-      const escapedSql = sql.replace(/'/g, "'\\''");
-      const result = execSync(`'${bin}' -json '${db}' '${escapedSql}'`, {
+      const result = execFileSync(bin, ["-json", db, sql], {
         encoding: "utf-8",
         timeout: 10_000,
         maxBuffer: 10 * 1024 * 1024,
-        shell: "/bin/sh",
       });
-      const trimmed = result.trim();
-      if (!trimmed || trimmed === "[]") {continue;}
-      const rows = JSON.parse(trimmed) as T[];
+      const rows = parseDuckdbJsonRows<T>(result);
       for (const row of rows) {
         if (dedupeKey) {
           const key = row[dedupeKey];
@@ -919,16 +911,12 @@ export async function duckdbQueryAllAsync<T = Record<string, unknown>>(
 
   for (const db of dbPaths) {
     try {
-      const escapedSql = sql.replace(/'/g, "'\\''");
-      const { stdout } = await execAsync(`'${bin}' -json '${db}' '${escapedSql}'`, {
+      const { stdout } = await execFileAsync(bin, ["-json", db, sql], {
         encoding: "utf-8",
         timeout: 10_000,
         maxBuffer: 10 * 1024 * 1024,
-        shell: "/bin/sh",
       });
-      const trimmed = stdout.trim();
-      if (!trimmed || trimmed === "[]") {continue;}
-      const rows = JSON.parse(trimmed) as T[];
+      const rows = parseDuckdbJsonRows<T>(stdout);
       for (const row of rows) {
         if (dedupeKey) {
           const key = row[dedupeKey];
@@ -958,18 +946,16 @@ export function findDuckDBForObject(objectName: string): string | null {
   if (!bin) {return null;}
 
   // Build the SQL then apply the same shell-escape as duckdbQuery:
-  // replace every ' with '\'' so the single-quoted shell arg stays valid.
   const sql = `SELECT id FROM objects WHERE name = '${objectName.replace(/'/g, "''")}' LIMIT 1`;
-  const escapedSql = sql.replace(/'/g, "'\\''");
 
   for (const db of dbPaths) {
     try {
-      const result = execSync(
-        `'${bin}' -json '${db}' '${escapedSql}'`,
-        { encoding: "utf-8", timeout: 5_000, maxBuffer: 1024 * 1024, shell: "/bin/sh" },
-      );
-      const trimmed = result.trim();
-      if (trimmed && trimmed !== "[]") {return db;}
+      const result = execFileSync(bin, ["-json", db, sql], {
+        encoding: "utf-8",
+        timeout: 5_000,
+        maxBuffer: 1024 * 1024,
+      });
+      if (parseDuckdbJsonRows(result).length > 0) {return db;}
     } catch {
       // continue to next DB
     }
@@ -987,16 +973,15 @@ export async function findDuckDBForObjectAsync(objectName: string): Promise<stri
   if (!bin) {return null;}
 
   const sql = `SELECT id FROM objects WHERE name = '${objectName.replace(/'/g, "''")}' LIMIT 1`;
-  const escapedSql = sql.replace(/'/g, "'\\''");
 
   for (const db of dbPaths) {
     try {
-      const { stdout } = await execAsync(
-        `'${bin}' -json '${db}' '${escapedSql}'`,
-        { encoding: "utf-8", timeout: 5_000, maxBuffer: 1024 * 1024, shell: "/bin/sh" },
-      );
-      const trimmed = stdout.trim();
-      if (trimmed && trimmed !== "[]") {return db;}
+      const { stdout } = await execFileAsync(bin, ["-json", db, sql], {
+        encoding: "utf-8",
+        timeout: 5_000,
+        maxBuffer: 1024 * 1024,
+      });
+      if (parseDuckdbJsonRows(stdout).length > 0) {return db;}
     } catch {
       // continue to next DB
     }
@@ -1031,11 +1016,9 @@ export function duckdbExecOnFile(dbFilePath: string, sql: string): boolean {
   if (!bin) {return false;}
 
   try {
-    const escapedSql = sql.replace(/'/g, "'\\''");
-    execSync(`'${bin}' '${dbFilePath}' '${escapedSql}'`, {
+    execFileSync(bin, [dbFilePath, sql], {
       encoding: "utf-8",
       timeout: 10_000,
-      shell: "/bin/sh",
     });
     return true;
   } catch {
@@ -1049,11 +1032,9 @@ export async function duckdbExecOnFileAsync(dbFilePath: string, sql: string): Pr
   if (!bin) {return false;}
 
   try {
-    const escapedSql = sql.replace(/'/g, "'\\''");
-    await execAsync(`'${bin}' '${dbFilePath}' '${escapedSql}'`, {
+    await execFileAsync(bin, [dbFilePath, sql], {
       encoding: "utf-8",
       timeout: 10_000,
-      shell: "/bin/sh",
     });
     return true;
   } catch {
@@ -1112,17 +1093,12 @@ export function duckdbQueryOnFile<T = Record<string, unknown>>(
   if (!bin) {return [];}
 
   try {
-    const escapedSql = sql.replace(/'/g, "'\\''");
-    const result = execSync(`'${bin}' -json '${dbFilePath}' '${escapedSql}'`, {
+    const result = execFileSync(bin, ["-json", dbFilePath, sql], {
       encoding: "utf-8",
       timeout: 15_000,
       maxBuffer: 10 * 1024 * 1024,
-      shell: "/bin/sh",
     });
-
-    const trimmed = result.trim();
-    if (!trimmed || trimmed === "[]") {return [];}
-    return JSON.parse(trimmed) as T[];
+    return parseDuckdbJsonRows<T>(result);
   } catch {
     return [];
   }
@@ -1137,17 +1113,12 @@ export async function duckdbQueryOnFileAsync<T = Record<string, unknown>>(
   if (!bin) {return [];}
 
   try {
-    const escapedSql = sql.replace(/'/g, "'\\''");
-    const { stdout } = await execAsync(`'${bin}' -json '${dbFilePath}' '${escapedSql}'`, {
+    const { stdout } = await execFileAsync(bin, ["-json", dbFilePath, sql], {
       encoding: "utf-8",
       timeout: 15_000,
       maxBuffer: 10 * 1024 * 1024,
-      shell: "/bin/sh",
     });
-
-    const trimmed = stdout.trim();
-    if (!trimmed || trimmed === "[]") {return [];}
-    return JSON.parse(trimmed) as T[];
+    return parseDuckdbJsonRows<T>(stdout);
   } catch {
     return [];
   }
@@ -1213,6 +1184,17 @@ export function resolveFilesystemPath(
   };
 }
 
+export function resolveWorkspacePath(
+  inputPath: string,
+  options: { allowMissing?: boolean } = {},
+): ResolvedFilesystemPath | null {
+  const resolvedPath = resolveFilesystemPath(inputPath, options);
+  if (!resolvedPath || !resolvedPath.withinWorkspace || resolvedPath.workspaceRelativePath == null) {
+    return null;
+  }
+  return resolvedPath;
+}
+
 /**
  * Validate and resolve a path within the workspace.
  * Prevents path traversal by ensuring the resolved path stays within root.
@@ -1221,7 +1203,7 @@ export function resolveFilesystemPath(
 export function safeResolvePath(
   relativePath: string,
 ): string | null {
-  const resolvedPath = resolveFilesystemPath(relativePath);
+  const resolvedPath = resolveWorkspacePath(relativePath);
   if (!resolvedPath || resolvedPath.kind !== "workspaceRelative") {return null;}
   return resolvedPath.absolutePath;
 }
@@ -1496,7 +1478,7 @@ export function isProtectedSystemPath(
  * Still prevents path traversal.
  */
 export function safeResolveNewPath(relativePath: string): string | null {
-  const resolvedPath = resolveFilesystemPath(relativePath, { allowMissing: true });
+  const resolvedPath = resolveWorkspacePath(relativePath, { allowMissing: true });
   if (!resolvedPath || resolvedPath.kind !== "workspaceRelative") {return null;}
   return resolvedPath.absolutePath;
 }

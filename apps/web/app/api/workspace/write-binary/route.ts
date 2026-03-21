@@ -1,6 +1,6 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { resolveFilesystemPath, isProtectedSystemPath } from "@/lib/workspace";
+import { resolveWorkspacePath, isProtectedSystemPath } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -28,7 +28,7 @@ export async function POST(req: Request) {
 		return Response.json({ error: "Missing 'file' field (Blob)" }, { status: 400 });
 	}
 
-	const targetPath = resolveFilesystemPath(relPath, { allowMissing: true });
+	const targetPath = resolveWorkspacePath(relPath, { allowMissing: true });
 	if (isProtectedSystemPath(targetPath)) {
 		return Response.json({ error: "Cannot modify system file" }, { status: 403 });
 	}
