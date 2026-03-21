@@ -21,6 +21,27 @@ const workspaceSeedMocks = vi.hoisted(() => ({
   })),
 }));
 
+const externalGatewayMocks = vi.hoisted(() => ({
+  resolveExternalGatewayMode: vi.fn(() => ({
+    enabled: false,
+    gatewayUrl: undefined,
+    gatewayPort: 19001,
+    auth: { hasToken: false, hasPassword: false },
+    modeLabel: "local" as const,
+    reason: "disabled",
+  })),
+}));
+
+const gatewayProbeMocks = vi.hoisted(() => ({
+  probeGatewayConnection: vi.fn(async () => ({ ok: true })),
+}));
+
+type StopRuntimeResult = {
+  port: number;
+  stoppedPids: number[];
+  skippedForeignPids: number[];
+};
+
 const spawnMock = vi.hoisted(() => vi.fn());
 const webRuntimeMocks = vi.hoisted(() => ({
   DEFAULT_WEB_APP_PORT: 3100,
@@ -54,7 +75,7 @@ const webRuntimeMocks = vi.hoisted(() => ({
     port: 3100,
     stoppedPids: [1234],
     skippedForeignPids: [],
-  })),
+  })) as any,
   waitForWebRuntime: vi.fn(async () => ({ ok: true, reason: "profiles payload shape is valid" })),
 }));
 
@@ -67,6 +88,14 @@ vi.mock("@clack/prompts", () => ({
 vi.mock("./workspace-seed.js", () => ({
   discoverWorkspaceDirs: workspaceSeedMocks.discoverWorkspaceDirs,
   syncManagedSkills: workspaceSeedMocks.syncManagedSkills,
+}));
+
+vi.mock("../config/external-gateway.js", () => ({
+  resolveExternalGatewayMode: externalGatewayMocks.resolveExternalGatewayMode,
+}));
+
+vi.mock("../gateway/probe.js", () => ({
+  probeGatewayConnection: gatewayProbeMocks.probeGatewayConnection,
 }));
 
 vi.mock("node:child_process", () => ({
@@ -176,7 +205,7 @@ describe("updateWebRuntimeCommand", () => {
           port: 3100,
           stoppedPids: [1234],
           skippedForeignPids: [],
-        }) as { port: number; stoppedPids: number[]; skippedForeignPids: number[] },
+        }) as StopRuntimeResult,
     );
     webRuntimeMocks.evaluateMajorVersionTransition.mockReset();
     webRuntimeMocks.evaluateMajorVersionTransition.mockImplementation(() => ({
@@ -207,6 +236,17 @@ describe("updateWebRuntimeCommand", () => {
           reason: string;
         },
     );
+    externalGatewayMocks.resolveExternalGatewayMode.mockReset();
+    externalGatewayMocks.resolveExternalGatewayMode.mockReturnValue({
+      enabled: false,
+      gatewayUrl: undefined,
+      gatewayPort: 19001,
+      auth: { hasToken: false, hasPassword: false },
+      modeLabel: "local",
+      reason: "disabled",
+    });
+    gatewayProbeMocks.probeGatewayConnection.mockReset();
+    gatewayProbeMocks.probeGatewayConnection.mockImplementation(async () => ({ ok: true }));
   });
 
   it("fails closed in non-interactive major upgrades without explicit approval (enforces mandatory operator consent)", async () => {
@@ -254,6 +294,36 @@ describe("updateWebRuntimeCommand", () => {
     );
     expect(webRuntimeMocks.ensureManagedWebRuntime).toHaveBeenCalled();
     expect(summary.majorGate.required).toBe(true);
+  });
+
+  it("skips OpenClaw update on major transitions in external gateway mode", async () => {
+    webRuntimeMocks.evaluateMajorVersionTransition.mockReturnValue({
+      previousMajor: 2,
+      currentMajor: 3,
+      isMajorTransition: true,
+    });
+    externalGatewayMocks.resolveExternalGatewayMode.mockReturnValue({
+      enabled: true,
+      gatewayUrl: "ws://gateway:19001",
+      gatewayPort: 19001,
+      auth: { hasToken: false, hasPassword: false },
+      modeLabel: "external",
+      reason: "external",
+    } as any);
+
+    await updateWebRuntimeCommand(
+      {
+        nonInteractive: true,
+        yes: true,
+      },
+      runtimeStub(),
+    );
+
+    expect(spawnMock).not.toHaveBeenCalledWith(
+      "/usr/local/bin/openclaw",
+      ["update", "--yes"],
+      expect.anything(),
+    );
   });
 
   it("syncs managed skills during update and includes result in summary", async () => {
@@ -324,7 +394,7 @@ describe("stopWebRuntimeCommand", () => {
       port: 3100,
       stoppedPids: [],
       skippedForeignPids: [91, 92],
-    });
+    } as StopRuntimeResult);
     const runtime = runtimeStub();
 
     const summary = await stopWebRuntimeCommand(
@@ -349,7 +419,7 @@ describe("startWebRuntimeCommand", () => {
           port: 3100,
           stoppedPids: [1234],
           skippedForeignPids: [],
-        }) as { port: number; stoppedPids: number[]; skippedForeignPids: number[] },
+        }) as StopRuntimeResult,
     );
     webRuntimeMocks.startManagedWebRuntime.mockReset();
     webRuntimeMocks.startManagedWebRuntime.mockImplementation(() => ({
@@ -372,6 +442,17 @@ describe("startWebRuntimeCommand", () => {
       runtimeServerPath: "/tmp/.openclaw-dench/web-runtime/app/server.js",
     });
     launchdMocks.uninstallWebRuntimeLaunchAgent.mockReset();
+    externalGatewayMocks.resolveExternalGatewayMode.mockReset();
+    externalGatewayMocks.resolveExternalGatewayMode.mockReturnValue({
+      enabled: false,
+      gatewayUrl: undefined,
+      gatewayPort: 19001,
+      auth: { hasToken: false, hasPassword: false },
+      modeLabel: "local",
+      reason: "disabled",
+    });
+    gatewayProbeMocks.probeGatewayConnection.mockReset();
+    gatewayProbeMocks.probeGatewayConnection.mockImplementation(async () => ({ ok: true }));
   });
 
   it("fails closed when non-dench listeners still own the port (prevents cross-process takeover)", async () => {
@@ -379,7 +460,7 @@ describe("startWebRuntimeCommand", () => {
       port: 3100,
       stoppedPids: [],
       skippedForeignPids: [9912],
-    });
+    } as StopRuntimeResult);
     const runtime = runtimeStub();
 
     await expect(startWebRuntimeCommand({}, runtime)).rejects.toThrow("non-Dench listener");
@@ -393,8 +474,8 @@ describe("startWebRuntimeCommand", () => {
       runtimeServerPath: "/tmp/.openclaw-dench/web-runtime/app/server.js",
       reason: "runtime-missing",
     };
-    webRuntimeMocks.startManagedWebRuntime.mockReturnValue(missingResult);
-    launchdMocks.installWebRuntimeLaunchAgent.mockReturnValue(missingResult);
+    webRuntimeMocks.startManagedWebRuntime.mockReturnValue(missingResult as any);
+    launchdMocks.installWebRuntimeLaunchAgent.mockReturnValue(missingResult as any);
     const runtime = runtimeStub();
 
     await expect(startWebRuntimeCommand({}, runtime)).rejects.toThrow("npx denchclaw update");
@@ -419,11 +500,11 @@ describe("startWebRuntimeCommand", () => {
       process.platform === "darwin"
         ? launchdMocks.installWebRuntimeLaunchAgent
         : webRuntimeMocks.startManagedWebRuntime;
-    expect(startMock).toHaveBeenCalledWith({
+    expect(startMock).toHaveBeenCalledWith(expect.objectContaining({
       stateDir: "/tmp/.openclaw-dench",
       port: 3100,
       gatewayPort: 19001,
-    });
+    }));
     expect(webRuntimeMocks.ensureManagedWebRuntime).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
     expect(summary.started).toBe(true);
@@ -453,6 +534,32 @@ describe("startWebRuntimeCommand", () => {
     expect(summary.gatewayError).toBeUndefined();
   });
 
+  it("treats the gateway as externally managed when daemonless mode has OPENCLAW_GATEWAY_URL", async () => {
+    externalGatewayMocks.resolveExternalGatewayMode.mockReturnValue({
+      enabled: true,
+      gatewayUrl: "ws://gateway:19001",
+      gatewayPort: 19001,
+      auth: { hasToken: false, hasPassword: false },
+      modeLabel: "external",
+      reason: "external",
+    } as any);
+    const runtime = runtimeStub();
+    const summary = await startWebRuntimeCommand(
+      { webPort: "3100", skipDaemonInstall: true },
+      runtime,
+    );
+
+    expect(webRuntimeMocks.runOpenClawCommand).not.toHaveBeenCalled();
+    expect(webRuntimeMocks.startManagedWebRuntime).toHaveBeenCalledWith({
+      stateDir: "/tmp/.openclaw-dench",
+      port: 3100,
+      gatewayPort: 19001,
+      env: process.env,
+    });
+    expect(summary.gatewayRestarted).toBe(false);
+    expect(summary.gatewayError).toBeUndefined();
+  });
+
   it("falls back to DenchClaw port 19001 when manifest has no lastGatewayPort (prevents 18789 hijack)", async () => {
     webRuntimeMocks.readManagedWebRuntimeManifest.mockReturnValue({
       schemaVersion: 1,
@@ -460,7 +567,7 @@ describe("startWebRuntimeCommand", () => {
       deployedAt: "2026-01-01T00:00:00.000Z",
       sourceStandaloneServer: "/tmp/server.js",
       lastPort: 3100,
-    });
+    } as any);
     const runtime = runtimeStub();
     await startWebRuntimeCommand({ webPort: "3100" }, runtime);
 
@@ -474,7 +581,7 @@ describe("startWebRuntimeCommand", () => {
   });
 
   it("falls back to DenchClaw port 19001 when manifest is null (fresh install, prevents 18789 hijack)", async () => {
-    webRuntimeMocks.readManagedWebRuntimeManifest.mockReturnValue(null);
+    webRuntimeMocks.readManagedWebRuntimeManifest.mockReturnValue(null as any);
     const runtime = runtimeStub();
     await startWebRuntimeCommand({ webPort: "3100" }, runtime);
 
@@ -498,7 +605,7 @@ describe("restartWebRuntimeCommand", () => {
           port: 3100,
           stoppedPids: [1234],
           skippedForeignPids: [],
-        }) as { port: number; stoppedPids: number[]; skippedForeignPids: number[] },
+        }) as StopRuntimeResult,
     );
     webRuntimeMocks.startManagedWebRuntime.mockReset();
     webRuntimeMocks.startManagedWebRuntime.mockImplementation(() => ({
@@ -555,7 +662,7 @@ describe("restartWebRuntimeCommand", () => {
     await restartWebRuntimeCommand({}, runtime);
 
     const logCalls = (runtime.log as ReturnType<typeof vi.fn>).mock.calls.map(
-      ([msg]: [string]) => msg,
+      (call) => call[0] as string,
     );
     expect(logCalls.some((msg) => typeof msg === "string" && msg.includes("restart"))).toBe(true);
     expect(logCalls.some((msg) => typeof msg === "string" && /\bstart\b/.test(msg) && !msg.includes("restart"))).toBe(false);

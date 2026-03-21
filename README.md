@@ -79,6 +79,44 @@ npx denchclaw update --skip-daemon-install
 npx denchclaw start --skip-daemon-install
 ```
 
+### External OpenClaw Gateway
+
+If OpenClaw is already running in another container, DenchClaw can connect to it directly without a host-global `openclaw` install.
+
+Required environment:
+
+```bash
+export DENCHCLAW_DAEMONLESS=1
+export OPENCLAW_GATEWAY_URL=ws://127.0.0.1:19001
+```
+
+Optional auth:
+
+```bash
+export OPENCLAW_GATEWAY_TOKEN=...
+# or
+export OPENCLAW_GATEWAY_PASSWORD=...
+```
+
+Notes:
+
+- External mode is enabled only when both daemonless mode and `OPENCLAW_GATEWAY_URL` are set.
+- DenchClaw will not install `openclaw`, run onboarding, or manage the gateway lifecycle in this mode.
+- Gateway auth secrets stay in environment variables and are never written into `openclaw.json`.
+- A shared or mounted `~/.openclaw-dench` state dir is optional, but may be required if the remote gateway enforces device identity or scoped operator access.
+
+Example deployment:
+
+```bash
+export DENCHCLAW_DAEMONLESS=1
+export OPENCLAW_GATEWAY_URL=ws://openclaw:19001
+
+# Optional if the remote gateway requires auth
+export OPENCLAW_GATEWAY_PASSWORD=supersecret
+
+npx denchclaw bootstrap --skip-daemon-install
+```
+
 ---
 
 ## Development

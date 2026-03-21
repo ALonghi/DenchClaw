@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { resolveStateDir } from "../config/paths.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveLsofCommandSync } from "../infra/ports-lsof.js";
 import { sleep } from "../utils.js";
@@ -249,8 +250,7 @@ export function resolveProfileStateDir(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   void profile;
-  const home = resolveRequiredHomeDir(env, os.homedir);
-  return path.join(home, ".openclaw-dench");
+  return resolveStateDir(env, () => resolveRequiredHomeDir(env, os.homedir));
 }
 
 export function resolveManagedWebRuntimeDir(stateDir: string): string {
@@ -906,22 +906,33 @@ export function startManagedWebRuntime(params: {
   const outFd = openSync(path.join(logsDir, "web-app.log"), "a");
   const errFd = openSync(path.join(logsDir, "web-app.err.log"), "a");
 
-  const gatewayAuthEnv: Record<string, string> = {};
-  for (const key of ["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"] as const) {
-    const value = params.env?.[key] ?? process.env[key];
+  const gatewayEnv: Record<string, string> = {};
+  for (const key of [
+    "OPENCLAW_GATEWAY_URL",
+    "OPENCLAW_GATEWAY_TOKEN",
+    "OPENCLAW_GATEWAY_PASSWORD",
+  ] as const) {
+    const value = params.env?.[key];
     if (value) {
-      gatewayAuthEnv[key] = value;
+      gatewayEnv[key] = value;
     }
   }
+
+  const {
+    OPENCLAW_GATEWAY_URL: _ignoredGatewayUrl,
+    OPENCLAW_GATEWAY_TOKEN: _ignoredGatewayToken,
+    OPENCLAW_GATEWAY_PASSWORD: _ignoredGatewayPassword,
+    ...baseEnv
+  } = process.env;
 
   const child = spawn(process.execPath, [runtimeServerPath], {
     cwd: path.dirname(runtimeServerPath),
     detached: true,
     stdio: ["ignore", outFd, errFd],
     env: {
-      ...process.env,
+      ...baseEnv,
       ...params.env,
-      ...gatewayAuthEnv,
+      ...gatewayEnv,
       PORT: String(params.port),
       HOSTNAME: "127.0.0.1",
       OPENCLAW_GATEWAY_PORT: String(params.gatewayPort),
@@ -951,10 +962,12 @@ export async function ensureManagedWebRuntime(params: {
   denchVersion: string;
   port: number;
   gatewayPort: number;
+  env?: NodeJS.ProcessEnv;
   startFn?: (p: {
     stateDir: string;
     port: number;
     gatewayPort: number;
+    env?: NodeJS.ProcessEnv;
   }) => StartManagedWebRuntimeResult;
 }): Promise<{ ready: boolean; reason: string }> {
   const install = installManagedWebRuntime({
@@ -991,6 +1004,7 @@ export async function ensureManagedWebRuntime(params: {
     stateDir: params.stateDir,
     port: params.port,
     gatewayPort: params.gatewayPort,
+    env: params.env,
   });
   if (!start.started) {
     return {
@@ -1024,6 +1038,7 @@ export async function ensureManagedWebRuntime(params: {
         stateDir: params.stateDir,
         port: params.port,
         gatewayPort: params.gatewayPort,
+        env: params.env,
       });
       if (retryStart.started) {
         const retryProbe = await waitForWebRuntime(params.port, retryStart.pid);

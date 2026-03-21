@@ -46,10 +46,6 @@ type UIState = {
   activeWorkspace?: string | null;
 };
 
-function resolveOpenClawHomeDir(): string {
-  return process.env.OPENCLAW_HOME?.trim() || homedir();
-}
-
 function expandUserPath(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -59,6 +55,25 @@ function expandUserPath(input: string): string {
     return join(homedir(), trimmed.slice(1));
   }
   return trimmed;
+}
+
+function resolveConfiguredStateDir(): string | null {
+  const explicitConfig = process.env.OPENCLAW_CONFIG_PATH?.trim();
+  if (explicitConfig) {
+    return resolve(expandUserPath(explicitConfig), "..");
+  }
+
+  const explicitStateDir = process.env.OPENCLAW_STATE_DIR?.trim();
+  if (explicitStateDir) {
+    return resolve(expandUserPath(explicitStateDir));
+  }
+
+  const explicitHome = process.env.OPENCLAW_HOME?.trim();
+  if (explicitHome) {
+    return join(resolve(expandUserPath(explicitHome)), FIXED_STATE_DIRNAME);
+  }
+
+  return null;
 }
 
 function normalizeWorkspaceName(name: string | null | undefined): string | null {
@@ -92,7 +107,7 @@ function isInternalWorkspaceNameForDiscovery(name: string): boolean {
 }
 
 function stateDirPath(): string {
-  return join(resolveOpenClawHomeDir(), FIXED_STATE_DIRNAME);
+  return resolveConfiguredStateDir() ?? join(homedir(), FIXED_STATE_DIRNAME);
 }
 
 function resolveWorkspaceDir(workspaceName: string): string {

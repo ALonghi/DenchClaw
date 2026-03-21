@@ -189,6 +189,32 @@ describe("workspace utilities", () => {
     });
   });
 
+  describe("resolveOpenClawStateDir", () => {
+    it("prefers OPENCLAW_CONFIG_PATH over other state inputs", async () => {
+      process.env.OPENCLAW_CONFIG_PATH = "/custom/state/openclaw.json";
+      process.env.OPENCLAW_STATE_DIR = "/ignored/state";
+      process.env.OPENCLAW_HOME = "/ignored/home";
+      const { resolveOpenClawStateDir } = await importWorkspace();
+      expect(resolveOpenClawStateDir()).toBe("/custom/state");
+    });
+
+    it("uses OPENCLAW_STATE_DIR when config path is not set", async () => {
+      process.env.OPENCLAW_STATE_DIR = "/custom/state";
+      const { resolveOpenClawStateDir } = await importWorkspace();
+      expect(resolveOpenClawStateDir()).toBe("/custom/state");
+    });
+
+    it("falls back to OPENCLAW_HOME and then default homedir", async () => {
+      process.env.OPENCLAW_HOME = "/custom/home";
+      let mod = await importWorkspace();
+      expect(mod.resolveOpenClawStateDir()).toBe("/custom/home/.openclaw-dench");
+
+      delete process.env.OPENCLAW_HOME;
+      mod = await importWorkspace();
+      expect(mod.resolveOpenClawStateDir()).toBe("/home/testuser/.openclaw-dench");
+    });
+  });
+
   // ─── resolveWebChatDir ────────────────────────────────────────────
 
   describe("resolveWebChatDir", () => {
