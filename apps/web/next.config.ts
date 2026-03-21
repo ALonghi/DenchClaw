@@ -18,6 +18,8 @@ try {
 const denchVersion = rootPkg.version ?? "";
 
 const nextConfig: NextConfig = {
+  allowedDevOrigins: ["127.0.0.1:3000", "localhost:3000"],
+
   env: {
     NEXT_PUBLIC_DENCHCLAW_VERSION: denchVersion,
     NEXT_PUBLIC_OPENCLAW_VERSION: openclawVersion,
