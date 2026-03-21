@@ -803,7 +803,7 @@ export function installManagedWebRuntime(params: {
     }
   }
 
-  cpSync(sourceAppDir, runtimeAppDir, { recursive: true, force: true, dereference: true });
+  cpSync(sourceAppDir, runtimeAppDir, { recursive: true, force: true, dereference: false });
 
   dereferenceRuntimeNodeModules(runtimeAppDir, standaloneDir);
   ensureStaticAssets(runtimeAppDir, params.packageRoot);
