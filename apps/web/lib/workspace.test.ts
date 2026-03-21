@@ -20,7 +20,11 @@ vi.mock("node:fs/promises", () => ({
 // Mock node:child_process
 vi.mock("node:child_process", () => ({
   execSync: vi.fn(() => ""),
+  execFileSync: vi.fn(() => ""),
   exec: vi.fn((_cmd: string, _opts: unknown, cb: (err: Error | null, result: { stdout: string }) => void) => {
+    cb(null, { stdout: "" });
+  }),
+  execFile: vi.fn((_cmd: string, _args: string[], _opts: unknown, cb: (err: Error | null, result: { stdout: string }) => void) => {
     cb(null, { stdout: "" });
   }),
 }));
@@ -31,13 +35,7 @@ vi.mock("node:os", () => ({
 }));
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { execSync } from "node:child_process";
 import { join } from "node:path";
-
-const _mockExistsSync = vi.mocked(existsSync);
-const _mockReadFileSync = vi.mocked(readFileSync);
-const _mockReaddirSync = vi.mocked(readdirSync);
-const _mockExecSync = vi.mocked(execSync);
 
 /** Helper to create mock Dirent entries. */
 function makeDirent(name: string, isDir: boolean): Dirent {
@@ -80,7 +78,11 @@ describe("workspace utilities", () => {
     }));
     vi.mock("node:child_process", () => ({
       execSync: vi.fn(() => ""),
+      execFileSync: vi.fn(() => ""),
       exec: vi.fn((_cmd: string, _opts: unknown, cb: (err: Error | null, result: { stdout: string }) => void) => {
+        cb(null, { stdout: "" });
+      }),
+      execFile: vi.fn((_cmd: string, _args: string[], _opts: unknown, cb: (err: Error | null, result: { stdout: string }) => void) => {
         cb(null, { stdout: "" });
       }),
     }));
@@ -97,7 +99,7 @@ describe("workspace utilities", () => {
   async function importWorkspace() {
     const { existsSync: es, readFileSync: rfs, readdirSync: rds } = await import("node:fs");
     const { access: acc, readdir: rda } = await import("node:fs/promises");
-    const { execSync: exs } = await import("node:child_process");
+    const { execFileSync: exs, execFile: exf } = await import("node:child_process");
     const mod = await import("./workspace.js");
     return {
       ...mod,
@@ -107,6 +109,7 @@ describe("workspace utilities", () => {
       mockAccess: vi.mocked(acc),
       mockReaddirAsync: vi.mocked(rda),
       mockExec: vi.mocked(exs),
+      mockExecAsync: vi.mocked(exf),
     };
   }
 
@@ -495,8 +498,7 @@ describe("workspace utilities", () => {
   describe("duckdbQueryAsync", () => {
     it("returns parsed JSON rows on success", async () => {
       process.env.OPENCLAW_WORKSPACE = WS_DIR;
-      const { duckdbQueryAsync, mockExists, mockAccess } = await importWorkspace();
-      const { exec: mockExecFn } = await import("node:child_process");
+      const { duckdbQueryAsync, mockExists, mockAccess, mockExecAsync } = await importWorkspace();
       const rootDb = join(WS_DIR, "workspace.duckdb");
       const bin = "/opt/homebrew/bin/duckdb";
       mockExists.mockImplementation((p) => {
@@ -507,7 +509,7 @@ describe("workspace utilities", () => {
         if (String(p) === rootDb) {return;}
         throw new Error("ENOENT");
       });
-      vi.mocked(mockExecFn).mockImplementation((_cmd: unknown, _opts: unknown, cb: unknown) => {
+      mockExecAsync.mockImplementation((_cmd: unknown, _args: unknown, _opts: unknown, cb: unknown) => {
         (cb as (err: null, r: { stdout: string }) => void)(null, { stdout: '[{"id":"1"}]' });
         return {} as never;
       });
@@ -528,11 +530,10 @@ describe("workspace utilities", () => {
 
     it("returns empty array for empty stdout", async () => {
       process.env.OPENCLAW_WORKSPACE = WS_DIR;
-      const { duckdbQueryAsync, mockExists, mockAccess } = await importWorkspace();
-      const { exec: mockExecFn } = await import("node:child_process");
+      const { duckdbQueryAsync, mockExists, mockAccess, mockExecAsync } = await importWorkspace();
       mockExists.mockReturnValue(true);
       mockAccess.mockImplementation(async () => undefined);
-      vi.mocked(mockExecFn).mockImplementation((_cmd: unknown, _opts: unknown, cb: unknown) => {
+      mockExecAsync.mockImplementation((_cmd: unknown, _args: unknown, _opts: unknown, cb: unknown) => {
         (cb as (err: null, r: { stdout: string }) => void)(null, { stdout: "" });
         return {} as never;
       });
@@ -542,11 +543,10 @@ describe("workspace utilities", () => {
 
     it("returns empty array on exec error", async () => {
       process.env.OPENCLAW_WORKSPACE = WS_DIR;
-      const { duckdbQueryAsync, mockExists, mockAccess } = await importWorkspace();
-      const { exec: mockExecFn } = await import("node:child_process");
+      const { duckdbQueryAsync, mockExists, mockAccess, mockExecAsync } = await importWorkspace();
       mockExists.mockReturnValue(true);
       mockAccess.mockImplementation(async () => undefined);
-      vi.mocked(mockExecFn).mockImplementation((_cmd: unknown, _opts: unknown, cb: unknown) => {
+      mockExecAsync.mockImplementation((_cmd: unknown, _args: unknown, _opts: unknown, cb: unknown) => {
         (cb as (err: Error) => void)(new Error("fail"));
         return {} as never;
       });
