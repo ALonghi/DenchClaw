@@ -1,0 +1,48 @@
+FROM node:22-bookworm-slim AS build
+
+WORKDIR /app
+
+ENV CI=1
+
+RUN corepack enable
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/web/package.json apps/web/package.json
+
+RUN pnpm install --frozen-lockfile
+
+COPY . .
+
+RUN pnpm build:plugin-env \
+ && pnpm build \
+ && pnpm web:build \
+ && pnpm web:prepack
+
+
+FROM node:22-bookworm-slim AS runtime
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV HOME=/home/node
+ENV DENCHCLAW_DAEMONLESS=1
+
+RUN corepack enable \
+ && mkdir -p /home/node/.openclaw-dench \
+ && chown -R node:node /app /home/node
+
+COPY --from=build --chown=node:node /app/package.json ./package.json
+COPY --from=build --chown=node:node /app/denchclaw.mjs ./denchclaw.mjs
+COPY --from=build --chown=node:node /app/dist ./dist
+COPY --from=build --chown=node:node /app/assets ./assets
+COPY --from=build --chown=node:node /app/extensions ./extensions
+COPY --from=build --chown=node:node /app/skills ./skills
+COPY --from=build --chown=node:node /app/apps/web/public ./apps/web/public
+COPY --from=build --chown=node:node /app/apps/web/.next/standalone ./apps/web/.next/standalone
+COPY --from=build --chown=node:node /app/apps/web/.next/static ./apps/web/.next/static
+
+USER node
+
+EXPOSE 3100
+
+CMD ["node", "denchclaw.mjs", "bootstrap", "--skip-daemon-install", "--non-interactive", "--no-open"]
