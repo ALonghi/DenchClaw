@@ -18,7 +18,7 @@ If this app is ever exposed beyond strict localhost-only use, compromise should 
 ### DC-SEC-001
 - Rule ID: `NEXT-AUTHZ-001`
 - Severity: Critical
-- Location: [apps/web/lib/workspace.ts](/Users/hybrid/dev/github/DenchClaw/apps/web/lib/workspace.ts#L1181), [apps/web/app/api/workspace/raw-file/route.ts](/Users/hybrid/dev/github/DenchClaw/apps/web/app/api/workspace/raw-file/route.ts#L56), [apps/web/app/api/workspace/raw-file/route.ts](/Users/hybrid/dev/github/DenchClaw/apps/web/app/api/workspace/raw-file/route.ts#L130), [apps/web/app/api/workspace/file/route.ts](/Users/hybrid/dev/github/DenchClaw/apps/web/app/api/workspace/file/route.ts#L41), [apps/web/app/api/workspace/file/route.ts](/Users/hybrid/dev/github/DenchClaw/apps/web/app/api/workspace/file/route.ts#L91), [apps/web/app/api/workspace/browse/route.ts](/Users/hybrid/dev/github/DenchClaw/apps/web/app/api/workspace/browse/route.ts#L105)
+- Location: [apps/web/lib/workspace.ts](apps/web/lib/workspace.ts#L1181), [apps/web/app/api/workspace/raw-file/route.ts](apps/web/app/api/workspace/raw-file/route.ts#L56), [apps/web/app/api/workspace/raw-file/route.ts](apps/web/app/api/workspace/raw-file/route.ts#L130), [apps/web/app/api/workspace/file/route.ts](apps/web/app/api/workspace/file/route.ts#L41), [apps/web/app/api/workspace/file/route.ts](apps/web/app/api/workspace/file/route.ts#L91), [apps/web/app/api/workspace/browse/route.ts](apps/web/app/api/workspace/browse/route.ts#L105)
 - Evidence:
 
 ```ts
