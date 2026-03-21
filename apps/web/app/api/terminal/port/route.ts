@@ -7,5 +7,13 @@ export function GET() {
   const port = getTerminalPort();
   const proxy = process.env.DENCHCLAW_DAEMONLESS === "1";
   const token = getTerminalAuthToken();
-  return NextResponse.json({ port, proxy, token });
+  return NextResponse.json(
+    { port, proxy, token },
+    {
+      headers: {
+        "Cache-Control": "no-store",
+        "Pragma": "no-cache",
+      },
+    },
+  );
 }
