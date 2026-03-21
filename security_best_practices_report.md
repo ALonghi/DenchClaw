@@ -2,6 +2,8 @@
 
 ## Executive Summary
 
+This report captures the pre-hardening findings that motivated the current security changes. Several issues listed below have now been fixed or partially mitigated in the fork; the report is retained as an audit record of what was identified before those changes landed.
+
 This fork is not hardened as a hostile-environment web application. The codebase assumes the HTTP and WebSocket surfaces are only reachable by a trusted local user. That assumption is not enforced in the application itself.
 
 The highest-impact issues are:
@@ -12,6 +14,14 @@ The highest-impact issues are:
 4. The built-in outbound proxy has SSRF protections that are easy to bypass.
 
 If this app is ever exposed beyond strict localhost-only use, compromise should be assumed. Even in localhost-only mode, several issues remain relevant because a malicious local process, browser context, or rebinding/proxy mistake would immediately inherit broad filesystem and shell access.
+
+## Remediation Status
+
+- `DC-SEC-001`: Partially fixed. Most browser-facing file mutation/read routes are now workspace-bound, but the local browse/picker model still needs explicit privileged gating.
+- `DC-SEC-002`: Fixed. DuckDB shell-string invocation was replaced with argument-array execution.
+- `DC-SEC-003`: Open. There is still no broad app-layer auth/authz boundary.
+- `DC-SEC-004`: Partially fixed. Hostname and resolved-IP checks were added, and the proxy is being further tightened to pin validated DNS results at connection time.
+- `DC-SEC-005`: Partially fixed. Terminal token and origin checks were added, but the feature remains high impact if exposed incorrectly.
 
 ## Critical
 

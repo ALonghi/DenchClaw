@@ -1,3 +1,5 @@
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
@@ -25,7 +27,31 @@ function isPrivateHost(host: string): boolean {
   return false;
 }
 
-async function assertPublicDestination(url: URL): Promise<void> {
+type ValidatedAddress = {
+  address: string;
+  family: 4 | 6;
+};
+
+function normalizeRequestHeaders(headers: Record<string, string> | undefined): Record<string, string> {
+  if (!headers) {return {};}
+  const sanitized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (typeof value !== "string") {continue;}
+    const lowerKey = key.toLowerCase();
+    if (
+      lowerKey === "host" ||
+      lowerKey === "connection" ||
+      lowerKey === "content-length" ||
+      lowerKey === "transfer-encoding"
+    ) {
+      continue;
+    }
+    sanitized[key] = value;
+  }
+  return sanitized;
+}
+
+async function assertPublicDestination(url: URL): Promise<ValidatedAddress[]> {
   if (!["http:", "https:"].includes(url.protocol)) {
     throw new Error("Only http and https URLs are allowed");
   }
@@ -36,13 +62,70 @@ async function assertPublicDestination(url: URL): Promise<void> {
     throw new Error("Requests to private/local addresses are not allowed");
   }
   if (isIP(url.hostname)) {
-    return;
+    return [{
+      address: url.hostname,
+      family: isIP(url.hostname) as 4 | 6,
+    }];
   }
 
   const records = await lookup(url.hostname, { all: true, verbatim: true });
   if (records.length === 0 || records.some((record) => isPrivateHost(record.address))) {
     throw new Error("Requests to private/local addresses are not allowed");
   }
+  return records.map((record) => ({
+    address: record.address,
+    family: record.family as 4 | 6,
+  }));
+}
+
+async function proxyRequest(
+  url: URL,
+  method: string,
+  headers: Record<string, string>,
+  body: string | undefined,
+  destination: ValidatedAddress,
+): Promise<Response> {
+  const requestImpl = url.protocol === "https:" ? httpsRequest : httpRequest;
+  return await new Promise<Response>((resolve, reject) => {
+    const upstreamReq = requestImpl(url, {
+      method,
+      headers,
+      lookup: (_hostname, _options, callback) => {
+        callback(null, destination.address, destination.family);
+      },
+    }, (upstreamRes) => {
+      const chunks: Buffer[] = [];
+      upstreamRes.on("data", (chunk) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+      upstreamRes.on("end", () => {
+        const responseHeaders: Record<string, string> = {};
+        for (const [key, value] of Object.entries(upstreamRes.headers)) {
+          if (Array.isArray(value)) {
+            responseHeaders[key] = value.join(", ");
+          } else if (typeof value === "string") {
+            responseHeaders[key] = value;
+          }
+        }
+
+        resolve(Response.json({
+          status: upstreamRes.statusCode ?? 502,
+          statusText: upstreamRes.statusMessage ?? "",
+          headers: responseHeaders,
+          body: Buffer.concat(chunks).toString("utf-8"),
+        }));
+      });
+    });
+
+    upstreamReq.setTimeout(15_000, () => {
+      upstreamReq.destroy(new Error("Upstream request timed out"));
+    });
+    upstreamReq.on("error", reject);
+    if (body !== undefined) {
+      upstreamReq.write(body);
+    }
+    upstreamReq.end();
+  });
 }
 
 export async function POST(req: Request) {
@@ -78,8 +161,9 @@ export async function POST(req: Request) {
     return Response.json({ error: "HTTP method not allowed" }, { status: 400 });
   }
 
+  let destinations: ValidatedAddress[];
   try {
-    await assertPublicDestination(parsed);
+    destinations = await assertPublicDestination(parsed);
   } catch (err) {
     return Response.json(
       { error: err instanceof Error ? err.message : "Request blocked" },
@@ -88,27 +172,14 @@ export async function POST(req: Request) {
   }
 
   try {
-    const resp = await fetch(url, {
+    const requestHeaders = normalizeRequestHeaders(body.headers);
+    return await proxyRequest(
+      parsed,
       method,
-      headers: body.headers || {},
-      body: method !== "GET" && method !== "HEAD"
-        ? body.body
-        : undefined,
-      redirect: "manual",
-    });
-
-    const respBody = await resp.text();
-    const respHeaders: Record<string, string> = {};
-    resp.headers.forEach((v, k) => {
-      respHeaders[k] = v;
-    });
-
-    return Response.json({
-      status: resp.status,
-      statusText: resp.statusText,
-      headers: respHeaders,
-      body: respBody,
-    });
+      requestHeaders,
+      method !== "GET" && method !== "HEAD" ? body.body : undefined,
+      destinations[0],
+    );
   } catch (err) {
     return Response.json(
       { error: err instanceof Error ? err.message : "Fetch failed" },

@@ -1,6 +1,6 @@
 import { existsSync, statSync } from "node:fs";
 import { basename } from "node:path";
-import { safeResolvePath } from "@/lib/workspace";
+import { resolveWorkspacePath } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -20,7 +20,7 @@ export async function GET(req: Request) {
 		);
 	}
 
-	const resolvedPath = safeResolvePath(rawPath);
+	const resolvedPath = resolveWorkspacePath(rawPath);
 	if (!resolvedPath) {
 		return Response.json(
 			{ error: "Path not found or path traversal rejected" },
@@ -28,15 +28,15 @@ export async function GET(req: Request) {
 		);
 	}
 
-	if (!existsSync(resolvedPath)) {
+	if (!existsSync(resolvedPath.absolutePath)) {
 		return Response.json(
-			{ error: "Path not found", path: resolvedPath },
+			{ error: "Path not found", path: resolvedPath.absolutePath },
 			{ status: 404 },
 		);
 	}
 
 	try {
-		const stat = statSync(resolvedPath);
+		const stat = statSync(resolvedPath.absolutePath);
 		const type = stat.isDirectory()
 			? "directory"
 			: stat.isFile()
@@ -44,13 +44,13 @@ export async function GET(req: Request) {
 				: "other";
 
 		return Response.json({
-			path: resolvedPath,
-			name: basename(resolvedPath) || resolvedPath,
+			path: resolvedPath.absolutePath,
+			name: basename(resolvedPath.absolutePath) || resolvedPath.absolutePath,
 			type,
 		});
 	} catch {
 		return Response.json(
-			{ error: "Cannot stat path", path: resolvedPath },
+			{ error: "Cannot stat path", path: resolvedPath.absolutePath },
 			{ status: 500 },
 		);
 	}

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { promisify } from "node:util";
-import { safeResolvePath } from "@/lib/workspace";
+import { resolveWorkspacePath } from "@/lib/workspace";
 
 const execFileAsync = promisify(execFile);
 
@@ -32,13 +32,14 @@ export async function POST(req: Request) {
 		);
 	}
 
-	const resolved = safeResolvePath(rawPath);
-	if (!resolved) {
+	const resolvedPath = resolveWorkspacePath(rawPath);
+	if (!resolvedPath) {
 		return Response.json(
 			{ error: "File not found or path traversal rejected" },
 			{ status: 404 },
 		);
 	}
+	const resolved = resolvedPath.absolutePath;
 
 	if (!existsSync(resolved)) {
 		return Response.json(
