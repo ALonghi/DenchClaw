@@ -14,6 +14,10 @@ if [ ! -f "$SERVER_PATH" ]; then
   exit 1
 fi
 
+# Bootstrap starts the managed runtime as a detached background process.
+# Stop it before starting the foreground server for the container.
+node denchclaw.mjs stop --skip-daemon-install --web-port "$WEB_PORT" >/dev/null 2>&1 || true
+
 exec env \
   PORT="$WEB_PORT" \
   HOSTNAME="0.0.0.0" \
