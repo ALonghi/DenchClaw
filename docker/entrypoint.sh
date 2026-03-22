@@ -7,16 +7,29 @@ SERVER_PATH="$STATE_DIR/web-runtime/app/server.js"
 WEB_PORT="${PORT:-3100}"
 GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 
-node denchclaw.mjs bootstrap --skip-daemon-install --non-interactive --no-open
+if [ ! -f "$SERVER_PATH" ]; then
+  node denchclaw.mjs bootstrap --skip-daemon-install --non-interactive --no-open
+fi
 
 if [ ! -f "$SERVER_PATH" ]; then
   echo "denchclaw-container-entrypoint: missing managed runtime server at $SERVER_PATH" >&2
   exit 1
 fi
 
-# Bootstrap starts the managed runtime as a detached background process.
-# Stop it before starting the foreground server for the container.
+# Ensure no detached managed runtime is still holding the port before the
+# foreground server starts.
 node denchclaw.mjs stop --skip-daemon-install --web-port "$WEB_PORT" >/dev/null 2>&1 || true
+
+i=0
+while lsof -iTCP:"$WEB_PORT" -sTCP:LISTEN -n -P >/dev/null 2>&1; do
+  i=$((i + 1))
+  if [ "$i" -ge 30 ]; then
+    echo "denchclaw-container-entrypoint: port $WEB_PORT is still in use after stop" >&2
+    lsof -iTCP:"$WEB_PORT" -sTCP:LISTEN -n -P >&2 || true
+    exit 1
+  fi
+  sleep 1
+done
 
 exec env \
   PORT="$WEB_PORT" \
