@@ -5,6 +5,7 @@ import {
   DEFAULT_GATEWAY_PORT,
   DENCHCLAW_DEFAULT_GATEWAY_PORT,
 } from "./paths.js";
+import { resolveExternalGatewayMode } from "./external-gateway.js";
 
 describe("resolveGatewayPort", () => {
   it("returns DenchClaw port when profile is dench and no config/env override (prevents OpenClaw port hijack)", () => {
@@ -117,5 +118,39 @@ describe("port constants", () => {
     expect(DENCHCLAW_DEFAULT_GATEWAY_PORT).not.toBe(DEFAULT_GATEWAY_PORT);
     expect(DENCHCLAW_DEFAULT_GATEWAY_PORT).toBe(19001);
     expect(DEFAULT_GATEWAY_PORT).toBe(18789);
+  });
+});
+
+describe("resolveExternalGatewayMode", () => {
+  it("ignores malformed OPENCLAW_GATEWAY_URL when daemonless mode is off", () => {
+    expect(() =>
+      resolveExternalGatewayMode({
+        daemonless: false,
+        env: {
+          OPENCLAW_GATEWAY_URL: "not a url",
+        },
+      }),
+    ).not.toThrow();
+
+    const result = resolveExternalGatewayMode({
+      daemonless: false,
+      env: {
+        OPENCLAW_GATEWAY_URL: "not a url",
+      },
+    });
+    expect(result.enabled).toBe(false);
+    expect(result.gatewayUrl).toBeUndefined();
+    expect(result.gatewayPort).toBe(DENCHCLAW_DEFAULT_GATEWAY_PORT);
+  });
+
+  it("still validates OPENCLAW_GATEWAY_URL when daemonless mode is enabled", () => {
+    expect(() =>
+      resolveExternalGatewayMode({
+        daemonless: true,
+        env: {
+          OPENCLAW_GATEWAY_URL: "not a url",
+        },
+      }),
+    ).toThrow("Invalid OPENCLAW_GATEWAY_URL");
   });
 });

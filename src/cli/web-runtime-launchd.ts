@@ -36,6 +36,9 @@ function buildPlistXml(params: {
   workingDirectory: string;
   port: number;
   gatewayPort: number;
+  gatewayUrl?: string;
+  gatewayToken?: string;
+  gatewayPassword?: string;
   stdoutPath: string;
   stderrPath: string;
 }): string {
@@ -66,6 +69,21 @@ function buildPlistXml(params: {
     `    <string>127.0.0.1</string>`,
     `    <key>OPENCLAW_GATEWAY_PORT</key>`,
     `    <string>${params.gatewayPort}</string>`,
+    ...(params.gatewayUrl
+      ? [`    <key>OPENCLAW_GATEWAY_URL</key>`, `    <string>${escapeXml(params.gatewayUrl)}</string>`]
+      : []),
+    ...(params.gatewayToken
+      ? [
+          `    <key>OPENCLAW_GATEWAY_TOKEN</key>`,
+          `    <string>${escapeXml(params.gatewayToken)}</string>`,
+        ]
+      : []),
+    ...(params.gatewayPassword
+      ? [
+          `    <key>OPENCLAW_GATEWAY_PASSWORD</key>`,
+          `    <string>${escapeXml(params.gatewayPassword)}</string>`,
+        ]
+      : []),
     `    <key>NODE_ENV</key>`,
     `    <string>production</string>`,
     `    <key>PATH</key>`,
@@ -142,6 +160,7 @@ export function installWebRuntimeLaunchAgent(params: {
   stateDir: string;
   port: number;
   gatewayPort: number;
+  env?: NodeJS.ProcessEnv;
 }): StartManagedWebRuntimeResult {
   const runtimeServerPath = resolveManagedWebRuntimeServerPath(params.stateDir);
   if (!existsSync(runtimeServerPath)) {
@@ -163,6 +182,9 @@ export function installWebRuntimeLaunchAgent(params: {
     workingDirectory: appDir,
     port: params.port,
     gatewayPort: params.gatewayPort,
+    gatewayUrl: params.env?.OPENCLAW_GATEWAY_URL,
+    gatewayToken: params.env?.OPENCLAW_GATEWAY_TOKEN,
+    gatewayPassword: params.env?.OPENCLAW_GATEWAY_PASSWORD,
     stdoutPath: path.join(logsDir, "web-app.log"),
     stderrPath: path.join(logsDir, "web-app.err.log"),
   });

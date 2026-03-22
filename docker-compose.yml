@@ -1,0 +1,30 @@
+services:
+  denchclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: denchclaw:local
+    env_file:
+      - ${DENCHCLAW_ENV_FILE:-.env.denchclaw}
+    environment:
+      HOME: /home/node
+      DENCHCLAW_DAEMONLESS: "1"
+      DENCHCLAW_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
+      PORT: ${DENCHCLAW_WEB_PORT:-3100}
+    volumes:
+      - denchclaw_state:/home/node/.openclaw-dench
+    ports:
+      - "${DENCHCLAW_WEB_PORT:-3100}:3100"
+    init: true
+    restart: unless-stopped
+    networks:
+      - openclaw
+
+volumes:
+  denchclaw_state:
+
+networks:
+  openclaw:
+    external: true
+    name: ${OPENCLAW_DOCKER_NETWORK:-openclaw_default}

@@ -2,7 +2,19 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const spawnMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: spawnMock,
+  };
+});
+
 import {
   classifyWebPortListener,
   cleanupManagedWebRuntimeBackup,
@@ -11,7 +23,21 @@ import {
   installManagedWebRuntime,
   readLastLogLines,
   rollbackManagedWebRuntime,
+  startManagedWebRuntime,
 } from "./web-runtime.js";
+
+function createMockChild(pid = 7788): EventEmitter & {
+  pid: number;
+  unref: ReturnType<typeof vi.fn>;
+} {
+  const child = new EventEmitter() as EventEmitter & {
+    pid: number;
+    unref: ReturnType<typeof vi.fn>;
+  };
+  child.pid = pid;
+  child.unref = vi.fn();
+  return child;
+}
 
 describe("evaluateWebProfilesPayload", () => {
   it("accepts nullable active profile when profiles payload shape is valid (prevents first-run false negatives)", () => {
@@ -229,5 +255,78 @@ describe("readLastLogLines", () => {
     writeFileSync(path.join(logsDir, "web-app.err.log"), "", "utf-8");
 
     expect(readLastLogLines(tmpDir, "web-app.err.log")).toBeUndefined();
+  });
+});
+
+describe("startManagedWebRuntime gateway env forwarding", () => {
+  let tmpDir: string;
+  let stateDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(path.join(os.tmpdir(), "web-runtime-start-test-"));
+    stateDir = path.join(tmpDir, "state");
+    mkdirSync(path.join(stateDir, "web-runtime", "app"), { recursive: true });
+    spawnMock.mockReset();
+    spawnMock.mockImplementation(() => createMockChild());
+    writeFileSync(
+      path.join(stateDir, "web-runtime", "app", "server.js"),
+      "console.log('ready');",
+      "utf-8",
+    );
+  });
+
+  afterEach(() => {
+    delete process.env.OPENCLAW_GATEWAY_URL;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("does not inherit gateway URL env from the parent process in local mode", () => {
+    process.env.OPENCLAW_GATEWAY_URL = "ws://remote.example.test:19001";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "stale-token";
+
+    const result = startManagedWebRuntime({
+      stateDir,
+      port: 3100,
+      gatewayPort: 19001,
+    });
+
+    expect(result.started).toBe(true);
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      [path.join(stateDir, "web-runtime", "app", "server.js")],
+      expect.objectContaining({
+        env: expect.not.objectContaining({
+          OPENCLAW_GATEWAY_URL: "ws://remote.example.test:19001",
+          OPENCLAW_GATEWAY_TOKEN: "stale-token",
+        }),
+      }),
+    );
+  });
+
+  it("forwards explicit gateway env only when external mode passes it through", () => {
+    const result = startManagedWebRuntime({
+      stateDir,
+      port: 3100,
+      gatewayPort: 19001,
+      env: {
+        OPENCLAW_GATEWAY_URL: "ws://gateway:19001",
+        OPENCLAW_GATEWAY_PASSWORD: "secret",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.started).toBe(true);
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      [path.join(stateDir, "web-runtime", "app", "server.js")],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          OPENCLAW_GATEWAY_URL: "ws://gateway:19001",
+          OPENCLAW_GATEWAY_PASSWORD: "secret",
+          OPENCLAW_GATEWAY_PORT: "19001",
+        }),
+      }),
+    );
   });
 });

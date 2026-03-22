@@ -6,7 +6,9 @@ import { confirm, isCancel, spinner } from "@clack/prompts";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { stylePromptMessage } from "../terminal/prompt-style.js";
 import { theme } from "../terminal/theme.js";
+import { resolveExternalGatewayMode } from "../config/external-gateway.js";
 import { DENCHCLAW_DEFAULT_GATEWAY_PORT, isDaemonlessMode } from "../config/paths.js";
+import { probeGatewayConnection } from "../gateway/probe.js";
 import { VERSION } from "../version.js";
 import { applyCliProfileEnv } from "./profile.js";
 import {
@@ -121,6 +123,34 @@ function firstNonEmptyLine(...values: Array<string | undefined>): string | undef
     }
   }
   return undefined;
+}
+
+function resolveLifecycleGatewayMode(params: {
+  daemonless: boolean;
+  stateDir: string;
+}): ReturnType<typeof resolveExternalGatewayMode> {
+  return resolveExternalGatewayMode({
+    daemonless: params.daemonless,
+    existingGatewayPort: resolveGatewayPort(params.stateDir),
+  });
+}
+
+async function probeExternalGateway(
+  stateDir: string,
+  gatewayMode: ReturnType<typeof resolveExternalGatewayMode>,
+): Promise<{ ok: boolean; detail?: string }> {
+  if (!gatewayMode.enabled || !gatewayMode.gatewayUrl) {
+    return { ok: true };
+  }
+
+  return await probeGatewayConnection({
+    stateDir,
+    settings: {
+      url: gatewayMode.gatewayUrl,
+      token: process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined,
+      password: process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined,
+    },
+  });
 }
 
 async function openUrl(url: string): Promise<boolean> {
@@ -245,15 +275,17 @@ async function ensureMajorUpgradeAcknowledged(params: {
   nonInteractive: boolean;
   yes: boolean;
   runtime: RuntimeEnv;
+  approvalLabel?: string;
 }): Promise<void> {
   if (!params.required) {
     return;
   }
+  const approvalLabel = params.approvalLabel ?? "OpenClaw update";
 
   if (params.nonInteractive || !process.stdin.isTTY) {
     if (!params.yes) {
       throw new Error(
-        `Major Dench upgrade detected (${params.previousVersion ?? "unknown"} -> ${params.currentVersion}). Re-run with --yes to approve the required OpenClaw update.`,
+        `Major Dench upgrade detected (${params.previousVersion ?? "unknown"} -> ${params.currentVersion}). Re-run with --yes to approve the required ${approvalLabel}.`,
       );
     }
     return;
@@ -265,15 +297,15 @@ async function ensureMajorUpgradeAcknowledged(params: {
 
   const decision = await confirm({
     message: stylePromptMessage(
-      `Major Dench upgrade detected (${params.previousVersion ?? "unknown"} -> ${params.currentVersion}). Continue with mandatory OpenClaw update now?`,
+      `Major Dench upgrade detected (${params.previousVersion ?? "unknown"} -> ${params.currentVersion}). Continue with mandatory ${approvalLabel} now?`,
     ),
     initialValue: true,
   });
   if (isCancel(decision) || !decision) {
     params.runtime.log(
-      theme.warn("Update cancelled. OpenClaw update is required for major upgrades."),
+      theme.warn(`Update cancelled. ${approvalLabel} is required for major upgrades.`),
     );
-    throw new Error("Major upgrade requires OpenClaw update approval.");
+    throw new Error(`Major upgrade requires ${approvalLabel} approval.`);
   }
 }
 
@@ -386,29 +418,31 @@ export async function updateWebRuntimeCommand(
     previousVersion: previousManifest?.deployedDenchVersion,
     currentVersion: VERSION,
   });
+  const daemonless = isDaemonlessMode(opts);
+  const gatewayMode = resolveLifecycleGatewayMode({ daemonless, stateDir });
 
   const nonInteractive = Boolean(opts.nonInteractive || opts.json);
   await ensureMajorUpgradeAcknowledged({
-    required: transition.isMajorTransition,
+    required: transition.isMajorTransition && !gatewayMode.enabled,
     previousVersion: previousManifest?.deployedDenchVersion,
     currentVersion: VERSION,
     nonInteractive,
     yes: Boolean(opts.yes),
     runtime,
+    approvalLabel: "OpenClaw update",
   });
 
-  if (transition.isMajorTransition) {
+  if (transition.isMajorTransition && !gatewayMode.enabled) {
     const openclawCommand = resolveOpenClawCommandOrThrow();
     await runOpenClawUpdateWithProgress(openclawCommand);
   }
 
-  const daemonless = isDaemonlessMode(opts);
   const selectedPort =
     parseOptionalPort(opts.webPort) ??
     parseOptionalPort(previousManifest?.lastPort) ??
     readLastKnownWebPort(stateDir) ??
     DEFAULT_WEB_APP_PORT;
-  const gatewayPort = resolveGatewayPort(stateDir);
+  const gatewayPort = gatewayMode.gatewayPort;
 
   if (!daemonless && process.platform === "darwin") {
     uninstallWebRuntimeLaunchAgent();
@@ -420,8 +454,10 @@ export async function updateWebRuntimeCommand(
     includeLegacyStandalone: true,
   });
 
-  const gatewayResult: { restarted: boolean; error?: string } = daemonless
-    ? { restarted: false, error: "skipped (daemonless)" }
+  const gatewayResult: { restarted: boolean; error?: string } = gatewayMode.enabled
+    ? { restarted: false, error: "externally managed" }
+    : daemonless
+      ? { restarted: false, error: "skipped (daemonless)" }
     : await restartGatewayDaemon({ profile, gatewayPort, json: Boolean(opts.json) });
 
   const workspaceDirs = discoverWorkspaceDirs(stateDir);
@@ -433,11 +469,13 @@ export async function updateWebRuntimeCommand(
     denchVersion: VERSION,
     port: selectedPort,
     gatewayPort,
+    env: gatewayMode.enabled ? process.env : undefined,
     startFn:
       !daemonless && process.platform === "darwin"
         ? (p) => installWebRuntimeLaunchAgent(p)
         : undefined,
   });
+  const gatewayProbe = await probeExternalGateway(stateDir, gatewayMode);
 
   const summary: UpdateWebRuntimeSummary = {
     profile,
@@ -453,7 +491,12 @@ export async function updateWebRuntimeCommand(
     ready: ensureResult.ready,
     reason: ensureResult.reason,
     gatewayRestarted: gatewayResult.restarted,
-    gatewayError: daemonless ? undefined : gatewayResult.error,
+    gatewayError:
+      gatewayMode.enabled && !gatewayProbe.ok
+        ? gatewayProbe.detail
+        : daemonless
+          ? undefined
+          : gatewayResult.error,
     skillSync: skillSyncResult,
   };
 
@@ -463,7 +506,9 @@ export async function updateWebRuntimeCommand(
     runtime.log(`Profile: ${profile}`);
     runtime.log(`Version: ${VERSION}`);
     runtime.log(`Web port: ${selectedPort}`);
-    if (daemonless) {
+    if (gatewayMode.enabled) {
+      runtime.log(`Gateway: externally managed (${gatewayMode.gatewayUrl})`);
+    } else if (daemonless) {
       runtime.log(`Gateway: skipped (daemonless mode)`);
     } else {
       runtime.log(`Gateway: ${summary.gatewayRestarted ? "restarted" : "restart failed"}`);
@@ -583,7 +628,8 @@ export async function startWebRuntimeCommand(
   const daemonless = isDaemonlessMode(opts);
   const stateDir = resolveProfileStateDir(profile);
   const selectedPort = parseOptionalPort(opts.webPort) ?? readLastKnownWebPort(stateDir);
-  const gatewayPort = resolveGatewayPort(stateDir);
+  const gatewayMode = resolveLifecycleGatewayMode({ daemonless, stateDir });
+  const gatewayPort = gatewayMode.gatewayPort;
 
   if (!daemonless && process.platform === "darwin") {
     uninstallWebRuntimeLaunchAgent();
@@ -601,18 +647,35 @@ export async function startWebRuntimeCommand(
     );
   }
 
-  const gatewayResult: { restarted: boolean; error?: string } = daemonless
-    ? { restarted: false, error: "skipped (daemonless)" }
+  const gatewayResult: { restarted: boolean; error?: string } = gatewayMode.enabled
+    ? { restarted: false, error: "externally managed" }
+    : daemonless
+      ? { restarted: false, error: "skipped (daemonless)" }
     : await restartGatewayDaemon({ profile, gatewayPort, json: Boolean(opts.json) });
 
   let startResult;
   if (!daemonless && process.platform === "darwin") {
-    startResult = installWebRuntimeLaunchAgent({ stateDir, port: selectedPort, gatewayPort });
+    startResult = installWebRuntimeLaunchAgent({
+      stateDir,
+      port: selectedPort,
+      gatewayPort,
+      env: gatewayMode.enabled ? process.env : undefined,
+    });
     if (!startResult.started && startResult.reason !== "runtime-missing") {
-      startResult = startManagedWebRuntime({ stateDir, port: selectedPort, gatewayPort });
+      startResult = startManagedWebRuntime({
+        stateDir,
+        port: selectedPort,
+        gatewayPort,
+        env: gatewayMode.enabled ? process.env : undefined,
+      });
     }
   } else {
-    startResult = startManagedWebRuntime({ stateDir, port: selectedPort, gatewayPort });
+    startResult = startManagedWebRuntime({
+      stateDir,
+      port: selectedPort,
+      gatewayPort,
+      env: gatewayMode.enabled ? process.env : undefined,
+    });
   }
 
   if (!startResult.started) {
@@ -634,6 +697,7 @@ export async function startWebRuntimeCommand(
       probeReason = `${probe.reason}\n--- web-app.err.log ---\n${errLog}`;
     }
   }
+  const gatewayProbe = await probeExternalGateway(stateDir, gatewayMode);
 
   const summary: StartWebRuntimeSummary = {
     profile,
@@ -643,7 +707,12 @@ export async function startWebRuntimeCommand(
     started: probe.ok,
     reason: probeReason,
     gatewayRestarted: gatewayResult.restarted,
-    gatewayError: daemonless ? undefined : gatewayResult.error,
+    gatewayError:
+      gatewayMode.enabled && !gatewayProbe.ok
+        ? gatewayProbe.detail
+        : daemonless
+          ? undefined
+          : gatewayResult.error,
   };
 
   if (opts.json) {
@@ -655,7 +724,9 @@ export async function startWebRuntimeCommand(
   runtime.log(theme.heading(`Dench web ${label}`));
   runtime.log(`Profile: ${profile}`);
   runtime.log(`Web port: ${selectedPort}`);
-  if (daemonless) {
+  if (gatewayMode.enabled) {
+    runtime.log(`Gateway: externally managed (${gatewayMode.gatewayUrl})`);
+  } else if (daemonless) {
     runtime.log(`Gateway: skipped (daemonless mode)`);
   } else {
     runtime.log(`Gateway: ${summary.gatewayRestarted ? "restarted" : "restart failed"}`);

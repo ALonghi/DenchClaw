@@ -235,6 +235,7 @@ describe("agent-runner", () => {
 			const ws = MockWs.instances[0];
 			expect(ws).toBeDefined();
 			expect(ws.constructorUrl).toMatch(/^ws:\/\//);
+			expect(ws.constructorOpts).not.toHaveProperty("origin");
 
 			expect(ws.methods).toContain("connect");
 			expect(ws.methods).toContain("sessions.patch");

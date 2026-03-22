@@ -556,7 +556,10 @@ class GatewayWsClient {
 		if (this.ws) {
 			return;
 		}
-		const ws = new NodeWebSocket(this.settings.url, { origin: this.settings.url });
+		// Server-side gateway connections should not impersonate a browser origin.
+		// OpenClaw applies allowedOrigins checks to Origin-bearing requests, and
+		// forcing the gateway URL here causes valid backend connections to be rejected.
+		const ws = new NodeWebSocket(this.settings.url);
 		this.ws = ws;
 
 		// Attach message/close handlers BEFORE awaiting "open" so that

@@ -35,6 +35,29 @@ vi.mock("@clack/prompts", () => ({
   spinner: promptMocks.spinner,
 }));
 
+const externalGatewayMocks = vi.hoisted(() => ({
+  resolveExternalGatewayMode: vi.fn(() => ({
+    enabled: false,
+    gatewayUrl: undefined,
+    gatewayPort: 19001,
+    auth: { hasToken: false, hasPassword: false },
+    modeLabel: "local" as const,
+    reason: "disabled",
+  })),
+}));
+
+const gatewayProbeMocks = vi.hoisted(() => ({
+  probeGatewayConnection: vi.fn(async () => ({ ok: true })),
+}));
+
+vi.mock("../config/external-gateway.js", () => ({
+  resolveExternalGatewayMode: externalGatewayMocks.resolveExternalGatewayMode,
+}));
+
+vi.mock("../gateway/probe.js", () => ({
+  probeGatewayConnection: gatewayProbeMocks.probeGatewayConnection,
+}));
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
@@ -258,6 +281,17 @@ describe("bootstrapCommand always-onboard behavior", () => {
     promptMocks.isCancel.mockReset();
     promptMocks.isCancel.mockImplementation((value: unknown) => value === promptMocks.cancelSignal);
     promptMocks.spinner.mockClear();
+    externalGatewayMocks.resolveExternalGatewayMode.mockReset();
+    externalGatewayMocks.resolveExternalGatewayMode.mockReturnValue({
+      enabled: false,
+      gatewayUrl: undefined,
+      gatewayPort: 19001,
+      auth: { hasToken: false, hasPassword: false },
+      modeLabel: "local",
+      reason: "disabled",
+    });
+    gatewayProbeMocks.probeGatewayConnection.mockReset();
+    gatewayProbeMocks.probeGatewayConnection.mockImplementation(async () => ({ ok: true }));
 
     spawnMock.mockImplementation((command, args = [], options) => {
       const commandString = String(command);
@@ -377,6 +411,55 @@ describe("bootstrapCommand always-onboard behavior", () => {
     rmSync(homeDir || stateDir, { recursive: true, force: true });
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("supports external gateway bootstrap without requiring a host openclaw CLI", async () => {
+    externalGatewayMocks.resolveExternalGatewayMode.mockReturnValue({
+      enabled: true,
+      gatewayUrl: "ws://gateway:19001",
+      gatewayPort: 19001,
+      auth: { hasToken: false, hasPassword: false },
+      modeLabel: "external",
+      reason: "external",
+    } as any);
+    process.env.DENCHCLAW_DAEMONLESS = "1";
+    process.env.OPENCLAW_GATEWAY_URL = "ws://gateway:19001";
+    writeFileSync(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify({
+        gateway: {
+          mode: "local",
+          auth: {
+            token: "stale-token",
+            password: "stale-password",
+          },
+        },
+      }),
+    );
+
+    const summary = await bootstrapCommand(
+      {
+        nonInteractive: true,
+        skipDaemonInstall: true,
+      },
+      {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    );
+
+    expect(summary.gatewayUrl).toBe("ws://gateway:19001");
+    expect(summary.openClawCliAvailable).toBe(false);
+    expect(spawnCalls.some((call) => call.command === "npm" && call.args.includes("install"))).toBe(
+      false,
+    );
+    expect(spawnCalls.some((call) => call.command === "openclaw")).toBe(false);
+
+    const config = JSON.parse(readFileSync(path.join(stateDir, "openclaw.json"), "utf-8"));
+    expect(config.gateway.mode).toBe("remote");
+    expect(config.gateway.remote.url).toBe("ws://gateway:19001");
+    expect(config.gateway.auth).toBeUndefined();
   });
 
   it("runs onboard every bootstrap even when config already exists (prevents stale auth drift)", async () => {

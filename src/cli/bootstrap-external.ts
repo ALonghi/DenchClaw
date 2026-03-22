@@ -13,7 +13,9 @@ import path from "node:path";
 import process from "node:process";
 import { confirm, isCancel, select, spinner, text } from "@clack/prompts";
 import json5 from "json5";
+import { resolveExternalGatewayMode } from "../config/external-gateway.js";
 import { isDaemonlessMode } from "../config/paths.js";
+import { probeGatewayConnection } from "../gateway/probe.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { readTelemetryConfig, markNoticeShown } from "../telemetry/config.js";
@@ -695,6 +697,7 @@ function stagePreOnboardConfig(
     workspaceDir: string;
     gatewayMode: string;
     gatewayPort: number;
+    gatewayRemoteUrl?: string;
   },
 ): void {
   const raw = readBootstrapConfig(stateDir) ?? {};
@@ -708,6 +711,22 @@ function stagePreOnboardConfig(
   const gateway = { ...(asRecord(raw.gateway) ?? {}) };
   gateway.mode = params.gatewayMode;
   gateway.port = params.gatewayPort;
+  if (params.gatewayRemoteUrl) {
+    const remote = { ...(asRecord(gateway.remote) ?? {}) };
+    remote.url = params.gatewayRemoteUrl;
+    delete remote.token;
+    delete remote.password;
+    gateway.remote = remote;
+
+    const auth = { ...(asRecord(gateway.auth) ?? {}) };
+    delete auth.token;
+    delete auth.password;
+    if (Object.keys(auth).length > 0) {
+      gateway.auth = auth;
+    } else {
+      delete gateway.auth;
+    }
+  }
   raw.gateway = gateway;
 
   const tools = { ...(asRecord(raw.tools) ?? {}) };
@@ -1655,6 +1674,7 @@ export function buildBootstrapDiagnostics(params: {
   profile: string;
   openClawCliAvailable: boolean;
   openClawVersion?: string;
+  externalGatewayMode?: boolean;
   gatewayPort: number;
   gatewayUrl: string;
   gatewayProbe: { ok: boolean; detail?: string };
@@ -1669,7 +1689,15 @@ export function buildBootstrapDiagnostics(params: {
   const env = params.env ?? process.env;
   const checks: BootstrapCheck[] = [];
 
-  if (params.openClawCliAvailable) {
+  if (params.externalGatewayMode) {
+    checks.push(
+      createCheck(
+        "openclaw-cli",
+        "pass",
+        "OpenClaw CLI not required; gateway lifecycle is externally managed.",
+      ),
+    );
+  } else if (params.openClawCliAvailable) {
     checks.push(
       createCheck(
         "openclaw-cli",
@@ -1709,11 +1737,13 @@ export function buildBootstrapDiagnostics(params: {
         "gateway",
         "fail",
         `Gateway probe failed at ${params.gatewayUrl}${params.gatewayProbe.detail ? ` (${params.gatewayProbe.detail})` : ""}.`,
-        remediationForGatewayFailure(
-          params.gatewayProbe.detail,
-          params.gatewayPort,
-          params.profile,
-        ),
+        params.externalGatewayMode
+          ? "Verify OPENCLAW_GATEWAY_URL, auth env, and any shared device identity state used by the remote gateway."
+          : remediationForGatewayFailure(
+              params.gatewayProbe.detail,
+              params.gatewayPort,
+              params.profile,
+            ),
       ),
     );
   }
@@ -1729,7 +1759,9 @@ export function buildBootstrapDiagnostics(params: {
         "agent-auth",
         "fail",
         authCheck.detail,
-        `Run \`openclaw --profile ${DEFAULT_DENCHCLAW_PROFILE} onboard --install-daemon\` to configure API keys.`,
+        params.externalGatewayMode
+          ? "Remote gateway auth and device identity are externally managed. Mount the shared state dir if the gateway requires device identity."
+          : `Run \`openclaw --profile ${DEFAULT_DENCHCLAW_PROFILE} onboard --install-daemon\` to configure API keys.`,
       ),
     );
   }
@@ -1821,6 +1853,147 @@ export function buildBootstrapDiagnostics(params: {
     checks,
     hasFailures: checks.some((check) => check.status === "fail"),
   };
+}
+
+async function bootstrapExternalGateway(params: {
+  opts: BootstrapOptions;
+  runtime: RuntimeEnv;
+  profile: string;
+  stateDir: string;
+  workspaceDir: string;
+  daemonless: boolean;
+  rolloutStage: BootstrapRolloutStage;
+  legacyFallbackEnabled: boolean;
+  bootstrapStartTime: number;
+}): Promise<BootstrapSummary> {
+  const packageRoot = resolveCliPackageRoot();
+  const externalGateway = resolveExternalGatewayMode({
+    daemonless: params.daemonless,
+    existingGatewayPort: readExistingGatewayPort(params.stateDir),
+  });
+  if (!externalGateway.enabled || !externalGateway.gatewayUrl) {
+    throw new Error("External gateway mode was requested without a valid OPENCLAW_GATEWAY_URL.");
+  }
+
+  mkdirSync(params.workspaceDir, { recursive: true });
+  stagePreOnboardConfig(params.stateDir, {
+    workspaceDir: params.workspaceDir,
+    gatewayMode: "remote",
+    gatewayPort: externalGateway.gatewayPort,
+    gatewayRemoteUrl: externalGateway.gatewayUrl,
+  });
+
+  const workspaceSeed = seedWorkspaceFromAssets({
+    workspaceDir: params.workspaceDir,
+    packageRoot,
+  });
+
+  const gatewayProbe = await probeGatewayConnection({
+    stateDir: params.stateDir,
+    settings: {
+      url: externalGateway.gatewayUrl,
+      token: process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined,
+      password: process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined,
+    },
+  });
+
+  const preferredWebPort = parseOptionalPort(params.opts.webPort) ?? DEFAULT_WEB_APP_PORT;
+  const webRuntimeStatus = await ensureManagedWebRuntime({
+    stateDir: params.stateDir,
+    packageRoot,
+    denchVersion: VERSION,
+    port: preferredWebPort,
+    gatewayPort: externalGateway.gatewayPort,
+    env: process.env,
+  });
+  const webReachable = webRuntimeStatus.ready;
+  const webUrl = `http://localhost:${preferredWebPort}`;
+  const diagnostics = buildBootstrapDiagnostics({
+    profile: params.profile,
+    openClawCliAvailable: false,
+    externalGatewayMode: true,
+    gatewayPort: externalGateway.gatewayPort,
+    gatewayUrl: externalGateway.gatewayUrl,
+    gatewayProbe,
+    webPort: preferredWebPort,
+    webReachable,
+    rolloutStage: params.rolloutStage,
+    legacyFallbackEnabled: params.legacyFallbackEnabled,
+    stateDir: params.stateDir,
+    posthogPluginInstalled: false,
+  });
+
+  let opened = false;
+  let openAttempted = false;
+  if (!params.opts.noOpen && !params.opts.json && webReachable) {
+    const nonInteractive = Boolean(params.opts.nonInteractive || params.opts.json);
+    if (nonInteractive) {
+      openAttempted = true;
+      opened = await openUrl(webUrl);
+    } else {
+      const wantOpen = await confirm({
+        message: stylePromptMessage(`Open ${webUrl} in your browser?`),
+        initialValue: true,
+      });
+      if (!isCancel(wantOpen) && wantOpen) {
+        openAttempted = true;
+        opened = await openUrl(webUrl);
+      }
+    }
+  }
+
+  if (!params.opts.json) {
+    params.runtime.log(theme.muted("Gateway lifecycle is externally managed."));
+    params.runtime.log(theme.muted(`Workspace seed: ${describeWorkspaceSeedResult(workspaceSeed)}`));
+    logBootstrapChecklist(diagnostics, params.runtime);
+    params.runtime.log("");
+    params.runtime.log(theme.heading("DenchClaw ready"));
+    params.runtime.log(`Profile: ${params.profile}`);
+    params.runtime.log(`OpenClaw CLI: not required`);
+    params.runtime.log(`Gateway: ${gatewayProbe.ok ? "reachable" : "check failed"}`);
+    params.runtime.log(`Gateway URL: ${externalGateway.gatewayUrl}`);
+    params.runtime.log(`Web UI: ${webUrl}`);
+    params.runtime.log(
+      `Rollout stage: ${params.rolloutStage}${params.legacyFallbackEnabled ? " (legacy fallback enabled)" : ""}`,
+    );
+    if (!opened && openAttempted) {
+      params.runtime.log(theme.muted("Browser open failed; copy/paste the URL above."));
+    }
+    if (!gatewayProbe.ok) {
+      params.runtime.log(
+        theme.warn(
+          "Remote gateway is not healthy. The web runtime was started anyway so you can inspect logs and configuration.",
+        ),
+      );
+    }
+  }
+
+  const summary: BootstrapSummary = {
+    profile: params.profile,
+    onboarded: true,
+    installedOpenClawCli: false,
+    openClawCliAvailable: false,
+    gatewayUrl: externalGateway.gatewayUrl,
+    gatewayReachable: gatewayProbe.ok,
+    workspaceSeed,
+    webUrl,
+    webReachable,
+    webOpened: opened,
+    diagnostics,
+  };
+
+  track("cli_bootstrap_completed", {
+    duration_ms: Date.now() - params.bootstrapStartTime,
+    workspace_created: Boolean(workspaceSeed),
+    gateway_reachable: gatewayProbe.ok,
+    web_reachable: webReachable,
+    version: VERSION,
+  });
+
+  if (params.opts.json) {
+    params.runtime.log(JSON.stringify(summary, null, 2));
+  }
+  return summary;
 }
 
 function formatCheckStatus(status: BootstrapCheckStatus): string {
@@ -2199,6 +2372,24 @@ export async function bootstrapCommand(
   }
 
   track("cli_bootstrap_started", { version: VERSION });
+
+  const externalGatewayMode = resolveExternalGatewayMode({
+    daemonless,
+    existingGatewayPort: readExistingGatewayPort(stateDir),
+  });
+  if (externalGatewayMode.enabled) {
+    return await bootstrapExternalGateway({
+      opts,
+      runtime,
+      profile,
+      stateDir,
+      workspaceDir,
+      daemonless,
+      rolloutStage,
+      legacyFallbackEnabled,
+      bootstrapStartTime,
+    });
+  }
 
   const installResult = await ensureOpenClawCliAvailable({
     stateDir,
